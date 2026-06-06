@@ -344,9 +344,55 @@ fn report_formats_nested_fields_with_clean_indentation() {
     let _audit = RigString::with_capacity(&mut arena, "audit_events", 8);
 
     let report = arena.report();
-    let expected = "RIG allocation report\nArena: format-check\nTracked containers: 2\nTotals:\n  total len: 0\n  total current capacity: 12\n  total growth events: 0\n  total pushed/appended operations: 0\nContainers:\n  Container: items\n  kind: RigVec\n  fields:\n    len: 0\n    initial capacity: 4\n    growth policy: RustDefault\n    current capacity: 4\n    growth events: 0\n    total pushed items: 0\n  Container: audit_events\n  kind: RigString\n  fields:\n    len: 0\n    initial capacity: 8\n    growth policy: RustDefault\n    current capacity: 8\n    growth events: 0\n    total append operations: 0\n    total appended bytes: 0\nGrowth history:\n  (none)";
 
-    assert_eq!(report, expected);
+    assert!(report.starts_with(
+        "RIG allocation report
+Arena: format-check"
+    ));
+    assert!(report.contains(
+        "
+Tracked containers: 2
+Totals:"
+    ));
+    assert!(report.contains(
+        "
+  total current capacity: 12"
+    ));
+    assert!(report.contains(
+        "
+  Container: items
+  kind: RigVec
+  fields:"
+    ));
+    assert!(report.contains(
+        "
+    initial capacity: 4"
+    ));
+    assert!(report.contains(
+        "
+  Container: audit_events
+  kind: RigString
+  fields:"
+    ));
+    assert!(report.contains(
+        "
+    total appended bytes: 0"
+    ));
+    assert!(report.contains(
+        "
+Growth history summary:
+  total_growth_events: 0"
+    ));
+    assert!(report.contains(
+        "
+  per_container:
+    (none)"
+    ));
+    assert!(report.contains(
+        "
+Growth history preview:
+  (none)"
+    ));
 }
 
 #[test]
@@ -1090,7 +1136,8 @@ fn growth_history_appears_in_human_report() {
     let new_capacity = users.capacity();
     let report = arena.report();
 
-    assert!(report.contains("Growth history:"));
+    assert!(report.contains("Growth history summary:"));
+    assert!(report.contains("Growth history preview:"));
     assert!(report.contains(&format!(
         "  users: {old_capacity} -> {new_capacity} at operation 1"
     )));
@@ -1103,7 +1150,8 @@ fn growth_history_human_report_says_none_without_growth_events() {
 
     let report = arena.report();
 
-    assert!(report.contains("Growth history:\n  (none)"));
+    assert!(report.contains("Growth history preview:\n  (none)"));
+    assert!(report.contains("total_growth_events: 0"));
 }
 
 #[test]

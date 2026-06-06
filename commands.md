@@ -118,6 +118,21 @@ cargo run --manifest-path rig/Cargo.toml --example policy_comparison
 ```
 
 ```bash
+# Run growth-summary tests by name fragment.
+cargo test --manifest-path rig/Cargo.toml summary
+```
+
+```bash
+# Run verbose-report tests by name fragment.
+cargo test --manifest-path rig/Cargo.toml verbose
+```
+
+```bash
+# Run policy comparison tests by name fragment.
+cargo test --manifest-path rig/Cargo.toml policy_comparison
+```
+
+```bash
 # Run Clippy and fail on warnings.
 cargo clippy --manifest-path rig/Cargo.toml -- -D warnings
 ```
@@ -137,6 +152,9 @@ cargo run --manifest-path rig/Cargo.toml --example ecs_simulation && \
 cargo run --manifest-path rig/Cargo.toml --example log_ingestion && \
 cargo run --manifest-path rig/Cargo.toml --example pathfinding && \
 cargo run --manifest-path rig/Cargo.toml --example policy_comparison && \
+cargo test --manifest-path rig/Cargo.toml summary && \
+cargo test --manifest-path rig/Cargo.toml verbose && \
+cargo test --manifest-path rig/Cargo.toml policy_comparison && \
 cargo clippy --manifest-path rig/Cargo.toml -- -D warnings && \
 cargo tree --manifest-path rig/Cargo.toml
 ```
