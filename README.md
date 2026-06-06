@@ -148,16 +148,21 @@ Lifetime strategy: arena-owned
 
 ---
 
-## Machine-readable reports
+## Machine-readable reports and diffs
 
-RIG v0.4.0 has real machine-readable reports and optional evidence persistence through the Rust ecosystem rather than homemade serialization.
+RIG v0.5.0 has real machine-readable reports, evidence comparison, and optional evidence persistence through the Rust ecosystem rather than homemade serialization.
 
 ```rust
 let snapshot = arena.snapshot();
 let json = arena.report_json();
+let before = arena.snapshot();
+// mutate tracked containers
+let after = arena.snapshot();
+let diff = before.diff(&after);
+let diff_json = diff.diff_json();
 ```
 
-`arena.snapshot()` returns an `ArenaReport` containing the arena name, tracked container count, aggregate totals, and a list of per-container reports. `arena.report_json()` pretty-prints that snapshot with real crates.io `serde` and `serde_json`.
+`arena.snapshot()` returns an `ArenaReport` containing the arena name, tracked container count, aggregate totals, and a list of per-container reports. `arena.report_json()` pretty-prints that snapshot with real crates.io `serde` and `serde_json`. `ArenaReport::diff(&after)` returns an `ArenaDiff` that reports containers added, containers removed, aggregate deltas, and per-container `ContainerDiff` entries for every container present in both reports. `diff.diff_json()` pretty-prints the diff through `serde_json`.
 
 Small JSON output example:
 
@@ -186,6 +191,35 @@ Small JSON output example:
     }
   ]
 }
+```
+
+
+## Evidence comparison
+
+RIG v0.5.0 can explain change between two snapshots. Take report A, mutate tracked containers, take report B, and diff them.
+
+```rust
+let before = arena.snapshot();
+users.push(9);
+let after = arena.snapshot();
+let diff = before.diff(&after);
+
+println!("{}", diff.report());
+println!("{}", diff.diff_json());
+```
+
+Readable diff output highlights the evidence a developer needs:
+
+```text
+RIG allocation diff
+Before: main
+After: main
+Changed containers:
+  users
+    len: +4
+    capacity: +8
+    growth events: +1
+    operations: +4
 ```
 
 ---

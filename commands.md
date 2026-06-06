@@ -140,3 +140,17 @@ find /tmp -maxdepth 1 -name "rig-*.json" 2>/dev/null
 # Useful when checking persistence tests and demo-like printed paths.
 cargo test -- --nocapture
 ```
+
+```bash
+# One-shot full validation for RIG v0.5.0 evidence comparison from the repository root.
+cargo fmt --manifest-path rig/Cargo.toml --check && \
+cargo test --manifest-path rig/Cargo.toml && \
+cargo run --manifest-path rig/Cargo.toml --example demo && \
+cargo clippy --manifest-path rig/Cargo.toml -- -D warnings && \
+cargo tree --manifest-path rig/Cargo.toml
+```
+
+```bash
+# Run only evidence comparison tests by name fragment from the repository root.
+cargo test --manifest-path rig/Cargo.toml diff
+```
