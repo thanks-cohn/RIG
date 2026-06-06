@@ -148,6 +148,48 @@ Lifetime strategy: arena-owned
 
 ---
 
+## Machine-readable reports
+
+RIG v0.3.0 adds real machine-readable reports through the Rust ecosystem rather than homemade serialization.
+
+```rust
+let snapshot = arena.snapshot();
+let json = arena.report_json();
+```
+
+`arena.snapshot()` returns an `ArenaReport` containing the arena name, tracked container count, aggregate totals, and a list of per-container reports. `arena.report_json()` pretty-prints that snapshot with real crates.io `serde` and `serde_json`.
+
+Small JSON output example:
+
+```json
+{
+  "arena_name": "main",
+  "tracked_container_count": 1,
+  "totals": {
+    "total_len": 2,
+    "total_current_capacity": 4,
+    "total_growth_events": 0,
+    "total_pushed_appended_operations": 2
+  },
+  "containers": [
+    {
+      "name": "users",
+      "kind": "RigVec",
+      "len": 2,
+      "initial_capacity": 4,
+      "current_capacity": 4,
+      "growth_events": 0,
+      "operation_label": "total pushed items",
+      "total_operations": 2,
+      "extra_metric_label": null,
+      "extra_metric_value": null
+    }
+  ]
+}
+```
+
+---
+
 ## Initial Goals
 
 ### v0

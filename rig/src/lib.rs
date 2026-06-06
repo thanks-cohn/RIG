@@ -1,3 +1,4 @@
+use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -14,6 +15,57 @@ impl ContainerKind {
             Self::RigString => "RigString",
         }
     }
+}
+
+/// Machine-readable totals for all containers tracked by an [`Arena`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ArenaTotals {
+    /// Sum of current lengths for every tracked container.
+    pub total_len: usize,
+    /// Sum of current capacities for every tracked container.
+    pub total_current_capacity: usize,
+    /// Sum of capacity growth events for every tracked container.
+    pub total_growth_events: usize,
+    /// Sum of tracked push/append operations for every tracked container.
+    pub total_pushed_appended_operations: usize,
+}
+
+/// Machine-readable state for one container tracked by an [`Arena`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContainerReport {
+    /// Human-readable container name supplied by the caller.
+    pub name: String,
+    /// RIG container wrapper kind, such as `RigVec` or `RigString`.
+    pub kind: String,
+    /// Current logical length.
+    pub len: usize,
+    /// Capacity requested when the tracked container was created.
+    pub initial_capacity: usize,
+    /// Current underlying Rust container capacity.
+    pub current_capacity: usize,
+    /// Number of operations that caused capacity to increase.
+    pub growth_events: usize,
+    /// Human-readable operation metric label used by the existing text report.
+    pub operation_label: String,
+    /// Count for the operation metric.
+    pub total_operations: usize,
+    /// Optional extra metric label for container-specific data.
+    pub extra_metric_label: Option<String>,
+    /// Optional extra metric value for container-specific data.
+    pub extra_metric_value: Option<usize>,
+}
+
+/// Machine-readable arena report returned by [`Arena::snapshot`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ArenaReport {
+    /// Human-readable arena name supplied by the caller.
+    pub arena_name: String,
+    /// Number of containers currently tracked by the arena.
+    pub tracked_container_count: usize,
+    /// Aggregated allocation and operation totals.
+    pub totals: ArenaTotals,
+    /// Per-container allocation and operation evidence.
+    pub containers: Vec<ContainerReport>,
 }
 
 #[derive(Debug, Clone)]
@@ -112,52 +164,90 @@ impl Arena {
         }
     }
 
+    /// Return a machine-readable snapshot for tracked containers.
+    pub fn snapshot(&self) -> ArenaReport {
+        let inner = self.inner.borrow();
+        let totals = ArenaTotals {
+            total_len: inner.records.iter().map(|record| record.len).sum(),
+            total_current_capacity: inner.records.iter().map(|record| record.capacity).sum(),
+            total_growth_events: inner
+                .records
+                .iter()
+                .map(|record| record.growth_events)
+                .sum(),
+            total_pushed_appended_operations: inner
+                .records
+                .iter()
+                .map(|record| record.total_operations)
+                .sum(),
+        };
+
+        let containers = inner
+            .records
+            .iter()
+            .map(|record| ContainerReport {
+                name: record.name.clone(),
+                kind: record.kind.as_str().to_owned(),
+                len: record.len,
+                initial_capacity: record.initial_capacity,
+                current_capacity: record.capacity,
+                growth_events: record.growth_events,
+                operation_label: record.operation_label.to_owned(),
+                total_operations: record.total_operations,
+                extra_metric_label: record.extra_metric_label.map(str::to_owned),
+                extra_metric_value: record.extra_metric_label.map(|_| record.extra_metric_value),
+            })
+            .collect();
+
+        ArenaReport {
+            arena_name: inner.name.clone(),
+            tracked_container_count: inner.records.len(),
+            totals,
+            containers,
+        }
+    }
+
+    /// Return a pretty JSON allocation and growth report for tracked containers.
+    pub fn report_json(&self) -> String {
+        serde_json::to_string_pretty(&self.snapshot())
+            .expect("serializing an ArenaReport should not fail")
+    }
+
     /// Return a human-readable allocation and growth report for tracked containers.
     pub fn report(&self) -> String {
-        let inner = self.inner.borrow();
-        let total_len: usize = inner.records.iter().map(|record| record.len).sum();
-        let total_capacity: usize = inner.records.iter().map(|record| record.capacity).sum();
-        let total_growth_events: usize = inner
-            .records
-            .iter()
-            .map(|record| record.growth_events)
-            .sum();
-        let total_operations: usize = inner
-            .records
-            .iter()
-            .map(|record| record.total_operations)
-            .sum();
-
+        let snapshot = self.snapshot();
         let mut report = format!(
             "RIG allocation report\nArena: {}\nTracked containers: {}\nTotals:\n  total len: {}\n  total current capacity: {}\n  total growth events: {}\n  total pushed/appended operations: {}\nContainers:",
-            inner.name,
-            inner.records.len(),
-            total_len,
-            total_capacity,
-            total_growth_events,
-            total_operations
+            snapshot.arena_name,
+            snapshot.tracked_container_count,
+            snapshot.totals.total_len,
+            snapshot.totals.total_current_capacity,
+            snapshot.totals.total_growth_events,
+            snapshot.totals.total_pushed_appended_operations
         );
 
-        if inner.records.is_empty() {
+        if snapshot.containers.is_empty() {
             report.push_str("\n  (none)");
             return report;
         }
 
-        for record in &inner.records {
+        for record in &snapshot.containers {
             report.push_str(&format!(
                 "\n  Container: {}\n  kind: {}\n  fields:\n    len: {}\n    initial capacity: {}\n    current capacity: {}\n    growth events: {}\n    {}: {}",
                 record.name,
-                record.kind.as_str(),
+                record.kind,
                 record.len,
                 record.initial_capacity,
-                record.capacity,
+                record.current_capacity,
                 record.growth_events,
                 record.operation_label,
                 record.total_operations
             ));
 
-            if let Some(label) = record.extra_metric_label {
-                report.push_str(&format!("\n    {}: {}", label, record.extra_metric_value));
+            if let (Some(label), Some(value)) =
+                (&record.extra_metric_label, record.extra_metric_value)
+            {
+                report.push_str(&format!("\n    {}: {}", label, value));
             }
         }
 
