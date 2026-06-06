@@ -181,3 +181,23 @@ cargo tree --manifest-path rig/Cargo.toml
 # Run only evidence comparison tests by name fragment from the repository root.
 cargo test --manifest-path rig/Cargo.toml diff
 ```
+
+```bash
+cargo run --example ecs_simulation
+# Run the ECS workload example.
+```
+
+```bash
+cargo run --example log_ingestion
+# Run the log ingestion workload example.
+```
+
+```bash
+cargo run --example pathfinding
+# Run the pathfinding workload example.
+```
+
+```bash
+cargo test workload
+# Run workload example smoke tests by name fragment, if tests use that naming.
+```

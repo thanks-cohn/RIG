@@ -231,3 +231,13 @@ The v0.7.0 smoke tests prove real capability:
 - JSON diffs parse and round-trip as `ArenaDiff`
 - human diffs are readable and inspectable
 - the repository does not contain a fake `vendor/` dependency tree
+
+## Real workload examples
+
+RIG v0.8.0 adds deterministic workload examples that explain real container behavior under workloads Rust developers already teach, benchmark, and optimize:
+
+- ECS simulation: tracks entity IDs, positions, velocities, active entity IDs, and a frame log while loading at least 100,000 entities and running at least 60 update frames.
+- Log ingestion: tracks a raw log buffer plus parsed, warning, and error line containers while deterministically generating and ingesting at least 50,000 log lines.
+- Pathfinding: tracks frontier, visited nodes, parent edges, reconstructed path nodes, and a search log while running deterministic breadth-first search on a grid graph.
+
+Each example prints human reports, JSON reports, diffs, and growth history. These examples are intentionally deterministic, require no external files, and do not create files automatically.
