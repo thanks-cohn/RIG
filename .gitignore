@@ -1,1 +1,3 @@
 rig/target/
+target/
+**/target/
