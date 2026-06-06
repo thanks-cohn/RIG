@@ -61,6 +61,21 @@ cargo test
 ```
 
 ```bash
+# Run rustdoc examples as tests.
+cargo test --doc
+```
+
+```bash
+# Build local API documentation without opening a browser.
+cargo doc --no-deps
+```
+
+```bash
+# Build and open local API documentation for the rig crate.
+cargo doc --no-deps --open
+```
+
+```bash
 # Run tests and show captured stdout/stderr from the crate directory.
 cargo test -- --nocapture
 ```
@@ -86,6 +101,7 @@ cargo tree
 cd ~/dev/RIG/rig && \
 cargo fmt --check && \
 cargo test && \
+cargo test --doc && \
 cargo run --example demo && \
 cargo clippy -- -D warnings && \
 cargo tree
@@ -99,6 +115,11 @@ cargo fmt --manifest-path rig/Cargo.toml --check
 ```bash
 # From the repository root, run tests for the rig crate by manifest path.
 cargo test --manifest-path rig/Cargo.toml
+```
+
+```bash
+# Run rustdoc examples from the repo root.
+cargo test --manifest-path rig/Cargo.toml --doc
 ```
 
 ```bash
@@ -142,9 +163,10 @@ cargo test -- --nocapture
 ```
 
 ```bash
-# One-shot full validation for RIG v0.5.0 evidence comparison from the repository root.
+# One-shot full validation for RIG v0.6.0 evidence comparison from the repository root.
 cargo fmt --manifest-path rig/Cargo.toml --check && \
 cargo test --manifest-path rig/Cargo.toml && \
+cargo test --manifest-path rig/Cargo.toml --doc && \
 cargo run --manifest-path rig/Cargo.toml --example demo && \
 cargo clippy --manifest-path rig/Cargo.toml -- -D warnings && \
 cargo tree --manifest-path rig/Cargo.toml
