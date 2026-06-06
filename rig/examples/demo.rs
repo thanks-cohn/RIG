@@ -21,10 +21,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut request_path = RigString::with_capacity(&mut arena, "request_path", 32);
     request_path.push_str("/v1/users/42");
 
+    let report_a = arena.snapshot();
+
+    for user_id in 9..=12 {
+        users.push(user_id);
+    }
+    cached_users.push(105);
+    let mut response_codes = RigVec::new(&mut arena, "response_codes");
+    response_codes.push(200);
+
+    let report_b = arena.snapshot();
+    let diff = report_a.diff(&report_b);
+
     println!("Rust is still safe, but allocation and growth behavior is now visible.\n");
     println!("{}", arena.report());
     println!();
     println!("{}", arena.report_json());
+    println!();
+    println!("{}", diff.report());
+    println!();
+    println!("{}", diff.diff_json());
     println!();
 
     let report_path = std::env::temp_dir().join(format!("rig-demo-{}.json", std::process::id()));

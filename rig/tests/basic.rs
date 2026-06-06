@@ -613,3 +613,214 @@ fn write_json_pretty_is_a_clear_alias_for_write_json() {
     let _ = fs::remove_file(&write_path);
     let _ = fs::remove_file(&pretty_path);
 }
+
+#[test]
+fn identical_reports_produce_zero_deltas() {
+    let mut arena = Arena::new("same-proof");
+    let mut users = RigVec::with_capacity(&mut arena, "users", 8);
+    users.push(1);
+    users.push(2);
+    let before = arena.snapshot();
+    let after = before.clone();
+
+    let diff = before.diff(&after);
+    let users_diff = diff
+        .containers_changed
+        .iter()
+        .find(|container| container.name == "users")
+        .expect("users diff evidence");
+
+    assert!(diff.containers_added.is_empty());
+    assert!(diff.containers_removed.is_empty());
+    assert_eq!(diff.total_len_delta, 0);
+    assert_eq!(diff.total_capacity_delta, 0);
+    assert_eq!(diff.total_growth_event_delta, 0);
+    assert_eq!(diff.total_operation_delta, 0);
+    assert_eq!(users_diff.len_delta, 0);
+    assert_eq!(users_diff.capacity_delta, 0);
+    assert_eq!(users_diff.growth_event_delta, 0);
+    assert_eq!(users_diff.operation_delta, 0);
+}
+
+#[test]
+fn added_container_detected() {
+    let mut before_arena = Arena::new("added-proof");
+    let mut before_users = RigVec::with_capacity(&mut before_arena, "users", 2);
+    before_users.push(1);
+    let before = before_arena.snapshot();
+
+    let mut after_arena = Arena::new("added-proof");
+    let mut after_users = RigVec::with_capacity(&mut after_arena, "users", 2);
+    after_users.push(1);
+    let mut jobs = RigVec::with_capacity(&mut after_arena, "jobs", 4);
+    jobs.push(9);
+    let after = after_arena.snapshot();
+
+    let diff = before.diff(&after);
+
+    assert_eq!(diff.containers_added.len(), 1);
+    assert_eq!(diff.containers_added[0].name, "jobs");
+    assert_eq!(diff.containers_added[0].len, 1);
+    assert!(diff.containers_removed.is_empty());
+}
+
+#[test]
+fn removed_container_detected() {
+    let mut before_arena = Arena::new("removed-proof");
+    let mut users = RigVec::with_capacity(&mut before_arena, "users", 2);
+    users.push(1);
+    let mut stale = RigString::with_capacity(&mut before_arena, "stale_sessions", 16);
+    stale.push_str("expired");
+    let before = before_arena.snapshot();
+
+    let mut after_arena = Arena::new("removed-proof");
+    let mut after_users = RigVec::with_capacity(&mut after_arena, "users", 2);
+    after_users.push(1);
+    let after = after_arena.snapshot();
+
+    let diff = before.diff(&after);
+
+    assert_eq!(diff.containers_removed.len(), 1);
+    assert_eq!(diff.containers_removed[0].name, "stale_sessions");
+    assert_eq!(diff.containers_removed[0].len, "expired".len());
+    assert!(diff.containers_added.is_empty());
+}
+
+#[test]
+fn len_increase_detected() {
+    let mut arena = Arena::new("len-proof");
+    let mut users = RigVec::with_capacity(&mut arena, "users", 8);
+    for user_id in 1..=8 {
+        users.push(user_id);
+    }
+    let before = arena.snapshot();
+
+    for user_id in 9..=12 {
+        users.push(user_id);
+    }
+    let after = arena.snapshot();
+    let diff = before.diff(&after);
+    let users_diff = diff
+        .containers_changed
+        .iter()
+        .find(|container| container.name == "users")
+        .expect("users diff evidence");
+
+    assert_eq!(users_diff.before_len, 8);
+    assert_eq!(users_diff.after_len, 12);
+    assert_eq!(users_diff.len_delta, 4);
+}
+
+#[test]
+fn capacity_increase_detected() {
+    let mut arena = Arena::new("capacity-diff-proof");
+    let mut users = RigVec::with_capacity(&mut arena, "users", 8);
+    for user_id in 1..=8 {
+        users.push(user_id);
+    }
+    let before = arena.snapshot();
+
+    users.push(9);
+    let after = arena.snapshot();
+    let diff = before.diff(&after);
+    let users_diff = diff
+        .containers_changed
+        .iter()
+        .find(|container| container.name == "users")
+        .expect("users diff evidence");
+
+    assert_eq!(users_diff.before_capacity, 8);
+    assert_eq!(users_diff.after_capacity, 16);
+    assert_eq!(users_diff.capacity_delta, 8);
+}
+
+#[test]
+fn growth_event_increase_detected() {
+    let mut arena = Arena::new("growth-diff-proof");
+    let mut users = RigVec::with_capacity(&mut arena, "users", 8);
+    for user_id in 1..=8 {
+        users.push(user_id);
+    }
+    let before = arena.snapshot();
+
+    users.push(9);
+    let after = arena.snapshot();
+    let diff = before.diff(&after);
+    let users_diff = diff
+        .containers_changed
+        .iter()
+        .find(|container| container.name == "users")
+        .expect("users diff evidence");
+
+    assert_eq!(users_diff.before_growth_events, 0);
+    assert_eq!(users_diff.after_growth_events, 1);
+    assert_eq!(users_diff.growth_event_delta, 1);
+}
+
+#[test]
+fn operation_increase_detected() {
+    let mut arena = Arena::new("operation-diff-proof");
+    let mut audit = RigString::with_capacity(&mut arena, "audit_events", 32);
+    audit.push_str("start");
+    let before = arena.snapshot();
+
+    audit.push_str(";load");
+    audit.push_str(";ok");
+    let after = arena.snapshot();
+    let diff = before.diff(&after);
+    let audit_diff = diff
+        .containers_changed
+        .iter()
+        .find(|container| container.name == "audit_events")
+        .expect("audit diff evidence");
+
+    assert_eq!(audit_diff.operation_label, "total append operations");
+    assert_eq!(audit_diff.before_operations, 1);
+    assert_eq!(audit_diff.after_operations, 3);
+    assert_eq!(audit_diff.operation_delta, 2);
+}
+
+#[test]
+fn json_diff_valid() {
+    let mut arena = Arena::new("json-diff-proof");
+    let mut users = RigVec::with_capacity(&mut arena, "users", 8);
+    for user_id in 1..=8 {
+        users.push(user_id);
+    }
+    let before = arena.snapshot();
+
+    users.push(9);
+    let diff = before.diff(&arena.snapshot());
+    let json = diff.diff_json();
+    let value: serde_json::Value = serde_json::from_str(&json).expect("valid diff JSON value");
+    let decoded: rig::ArenaDiff = serde_json::from_str(&json).expect("valid ArenaDiff JSON");
+
+    assert_eq!(value["before_arena_name"], "json-diff-proof");
+    assert_eq!(value["containers_changed"][0]["name"], "users");
+    assert_eq!(decoded, diff);
+}
+
+#[test]
+fn human_diff_readable() {
+    let mut arena = Arena::new("human-diff-proof");
+    let mut users = RigVec::with_capacity(&mut arena, "users", 8);
+    for user_id in 1..=8 {
+        users.push(user_id);
+    }
+    let before = arena.snapshot();
+
+    for user_id in 9..=12 {
+        users.push(user_id);
+    }
+    let diff = before.diff(&arena.snapshot());
+    let report = diff.report();
+
+    assert!(report.contains("RIG allocation diff"));
+    assert!(report.contains("Before: human-diff-proof"));
+    assert!(report.contains("After: human-diff-proof"));
+    assert!(report.contains("  users"));
+    assert!(report.contains("    len: +4"));
+    assert!(report.contains("    capacity: +8"));
+    assert!(report.contains("    growth events: +1"));
+    assert!(report.contains("    operations: +4"));
+}

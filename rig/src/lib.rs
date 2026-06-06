@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
+use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
 use std::fs;
@@ -70,6 +71,247 @@ pub struct ArenaReport {
     pub totals: ArenaTotals,
     /// Per-container allocation and operation evidence.
     pub containers: Vec<ContainerReport>,
+}
+
+/// Machine-readable change evidence between two reports for one shared container.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContainerDiff {
+    /// Human-readable container name present in both reports.
+    pub name: String,
+    /// RIG container wrapper kind from the later report.
+    pub kind: String,
+    /// Length in the earlier report.
+    pub before_len: usize,
+    /// Length in the later report.
+    pub after_len: usize,
+    /// Signed length change from earlier to later report.
+    pub len_delta: i64,
+    /// Capacity in the earlier report.
+    pub before_capacity: usize,
+    /// Capacity in the later report.
+    pub after_capacity: usize,
+    /// Signed capacity change from earlier to later report.
+    pub capacity_delta: i64,
+    /// Growth event count in the earlier report.
+    pub before_growth_events: usize,
+    /// Growth event count in the later report.
+    pub after_growth_events: usize,
+    /// Signed growth event change from earlier to later report.
+    pub growth_event_delta: i64,
+    /// Operation metric label from the later report.
+    pub operation_label: String,
+    /// Operation count in the earlier report.
+    pub before_operations: usize,
+    /// Operation count in the later report.
+    pub after_operations: usize,
+    /// Signed operation count change from earlier to later report.
+    pub operation_delta: i64,
+}
+
+/// Machine-readable change evidence between two [`ArenaReport`] values.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ArenaDiff {
+    /// Arena name in the earlier report.
+    pub before_arena_name: String,
+    /// Arena name in the later report.
+    pub after_arena_name: String,
+    /// Containers present only in the later report.
+    pub containers_added: Vec<ContainerReport>,
+    /// Containers present only in the earlier report.
+    pub containers_removed: Vec<ContainerReport>,
+    /// Signed aggregate length change from earlier to later report.
+    pub total_len_delta: i64,
+    /// Signed aggregate capacity change from earlier to later report.
+    pub total_capacity_delta: i64,
+    /// Signed aggregate growth event change from earlier to later report.
+    pub total_growth_event_delta: i64,
+    /// Signed aggregate operation change from earlier to later report.
+    pub total_operation_delta: i64,
+    /// Deltas for every container present in both reports.
+    pub containers_changed: Vec<ContainerDiff>,
+}
+
+impl ArenaReport {
+    /// Compare this earlier report with a later report.
+    pub fn diff(&self, after: &ArenaReport) -> ArenaDiff {
+        let before_by_name: BTreeMap<&str, &ContainerReport> = self
+            .containers
+            .iter()
+            .map(|container| (container.name.as_str(), container))
+            .collect();
+        let after_by_name: BTreeMap<&str, &ContainerReport> = after
+            .containers
+            .iter()
+            .map(|container| (container.name.as_str(), container))
+            .collect();
+
+        let containers_added = after
+            .containers
+            .iter()
+            .filter(|container| !before_by_name.contains_key(container.name.as_str()))
+            .cloned()
+            .collect();
+        let containers_removed = self
+            .containers
+            .iter()
+            .filter(|container| !after_by_name.contains_key(container.name.as_str()))
+            .cloned()
+            .collect();
+
+        let containers_changed = self
+            .containers
+            .iter()
+            .filter_map(|before| {
+                after_by_name
+                    .get(before.name.as_str())
+                    .map(|after| ContainerDiff::between(before, after))
+            })
+            .collect();
+
+        ArenaDiff {
+            before_arena_name: self.arena_name.clone(),
+            after_arena_name: after.arena_name.clone(),
+            containers_added,
+            containers_removed,
+            total_len_delta: signed_delta(self.totals.total_len, after.totals.total_len),
+            total_capacity_delta: signed_delta(
+                self.totals.total_current_capacity,
+                after.totals.total_current_capacity,
+            ),
+            total_growth_event_delta: signed_delta(
+                self.totals.total_growth_events,
+                after.totals.total_growth_events,
+            ),
+            total_operation_delta: signed_delta(
+                self.totals.total_pushed_appended_operations,
+                after.totals.total_pushed_appended_operations,
+            ),
+            containers_changed,
+        }
+    }
+}
+
+impl ContainerDiff {
+    fn between(before: &ContainerReport, after: &ContainerReport) -> Self {
+        Self {
+            name: before.name.clone(),
+            kind: after.kind.clone(),
+            before_len: before.len,
+            after_len: after.len,
+            len_delta: signed_delta(before.len, after.len),
+            before_capacity: before.current_capacity,
+            after_capacity: after.current_capacity,
+            capacity_delta: signed_delta(before.current_capacity, after.current_capacity),
+            before_growth_events: before.growth_events,
+            after_growth_events: after.growth_events,
+            growth_event_delta: signed_delta(before.growth_events, after.growth_events),
+            operation_label: after.operation_label.clone(),
+            before_operations: before.total_operations,
+            after_operations: after.total_operations,
+            operation_delta: signed_delta(before.total_operations, after.total_operations),
+        }
+    }
+}
+
+impl ArenaDiff {
+    /// Return a pretty JSON diff report.
+    pub fn diff_json(&self) -> String {
+        serde_json::to_string_pretty(self).expect("serializing an ArenaDiff should not fail")
+    }
+
+    /// Return a human-readable diff report.
+    pub fn report(&self) -> String {
+        self.to_string()
+    }
+}
+
+impl fmt::Display for ArenaDiff {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(formatter, "RIG allocation diff")?;
+        writeln!(formatter, "Before: {}", self.before_arena_name)?;
+        writeln!(formatter, "After: {}", self.after_arena_name)?;
+        writeln!(formatter, "Totals:")?;
+        writeln!(formatter, "  len: {}", format_delta(self.total_len_delta))?;
+        writeln!(
+            formatter,
+            "  capacity: {}",
+            format_delta(self.total_capacity_delta)
+        )?;
+        writeln!(
+            formatter,
+            "  growth events: {}",
+            format_delta(self.total_growth_event_delta)
+        )?;
+        writeln!(
+            formatter,
+            "  operations: {}",
+            format_delta(self.total_operation_delta)
+        )?;
+
+        writeln!(formatter, "Added containers:")?;
+        if self.containers_added.is_empty() {
+            writeln!(formatter, "  (none)")?;
+        } else {
+            for container in &self.containers_added {
+                writeln!(formatter, "  {} ({})", container.name, container.kind)?;
+            }
+        }
+
+        writeln!(formatter, "Removed containers:")?;
+        if self.containers_removed.is_empty() {
+            writeln!(formatter, "  (none)")?;
+        } else {
+            for container in &self.containers_removed {
+                writeln!(formatter, "  {} ({})", container.name, container.kind)?;
+            }
+        }
+
+        writeln!(formatter, "Changed containers:")?;
+        if self.containers_changed.is_empty() {
+            write!(formatter, "  (none)")?;
+        } else {
+            for (index, container) in self.containers_changed.iter().enumerate() {
+                writeln!(formatter, "  {}", container.name)?;
+                writeln!(formatter, "    len: {}", format_delta(container.len_delta))?;
+                writeln!(
+                    formatter,
+                    "    capacity: {}",
+                    format_delta(container.capacity_delta)
+                )?;
+                writeln!(
+                    formatter,
+                    "    growth events: {}",
+                    format_delta(container.growth_event_delta)
+                )?;
+                write!(
+                    formatter,
+                    "    operations: {}",
+                    format_delta(container.operation_delta)
+                )?;
+                if index + 1 < self.containers_changed.len() {
+                    writeln!(formatter)?;
+                }
+            }
+        }
+
+        Ok(())
+    }
+}
+
+fn signed_delta(before: usize, after: usize) -> i64 {
+    if after >= before {
+        i64::try_from(after - before).expect("RIG delta should fit in i64")
+    } else {
+        -i64::try_from(before - after).expect("RIG delta should fit in i64")
+    }
+}
+
+fn format_delta(delta: i64) -> String {
+    if delta > 0 {
+        format!("+{delta}")
+    } else {
+        delta.to_string()
+    }
 }
 
 /// Errors that can occur while loading a persisted [`ArenaReport`].

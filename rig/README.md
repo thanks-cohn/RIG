@@ -4,9 +4,9 @@ RIG is a Rust crate that brings Zig-style allocator visibility to everyday Rust 
 
 Rust keeps doing the safety work: ownership, borrowing, lifetimes, and type checking are still handled by normal Rust. RIG does not replace the compiler, invent a programming language, or implement custom allocator internals. It makes allocation and growth behavior visible at the container level so developers can see what grows over time.
 
-## What v0.4.0 proves
+## What v0.5.0 proves
 
-RIG v0.4.0 is intentionally small and real:
+RIG v0.5.0 is intentionally small and real:
 
 - `Arena` gives a human-readable name to a tracking scope.
 - `RigVec<T>` wraps a real `Vec<T>`.
@@ -18,6 +18,8 @@ RIG v0.4.0 is intentionally small and real:
 - `arena.report_json()` serializes that snapshot with real `serde_json`.
 - `arena.write_json(path)` persists a report only when explicitly called.
 - `Arena::load_report(path)` loads persisted report JSON back into an `ArenaReport`.
+- `ArenaReport::diff(&after)` compares two snapshots and returns an `ArenaDiff`.
+- `ArenaDiff::diff_json()` serializes comparison evidence with real `serde_json`.
 
 ## Example
 
@@ -35,16 +37,21 @@ println!("{}", arena.report());
 
 Output includes the arena name, container name, current length, capacity, growth events, and total pushed/appended operations.
 
-## Machine-readable reports
+## Machine-readable reports and diffs
 
-RIG keeps the existing human report and adds structured report data for tools.
+RIG keeps the existing human report and adds structured report and diff data for tools.
 
 ```rust
 let snapshot = arena.snapshot();
 let json = arena.report_json();
+let before = arena.snapshot();
+// mutate tracked containers
+let after = arena.snapshot();
+let diff = before.diff(&after);
+let diff_json = diff.diff_json();
 ```
 
-`arena.snapshot()` returns an `ArenaReport` with the arena name, tracked container count, aggregate totals, and per-container evidence. `arena.report_json()` pretty-prints the same data through `serde_json::to_string_pretty(&self.snapshot())`, using the real crates.io `serde` and `serde_json` crates.
+`arena.snapshot()` returns an `ArenaReport` with the arena name, tracked container count, aggregate totals, and per-container evidence. `arena.report_json()` pretty-prints the same data through `serde_json::to_string_pretty(&self.snapshot())`, using the real crates.io `serde` and `serde_json` crates. `ArenaReport::diff(&after)` returns an `ArenaDiff` with containers added, containers removed, aggregate deltas, and a `ContainerDiff` for every container present in both reports. `diff.diff_json()` uses `serde_json` for machine-readable comparison evidence.
 
 Small JSON example:
 
@@ -76,6 +83,34 @@ Small JSON example:
 ```
 
 
+## Evidence comparison
+
+RIG v0.5.0 explains change between two reports without adding a CLI, macros, async work, background services, automatic persistence, or hidden files.
+
+```rust
+let before = arena.snapshot();
+users.push(9);
+let after = arena.snapshot();
+let diff = before.diff(&after);
+
+println!("{}", diff.report());
+println!("{}", diff.diff_json());
+```
+
+Human diff output is intentionally direct:
+
+```text
+RIG allocation diff
+Before: request-lifetime arena
+After: request-lifetime arena
+Changed containers:
+  users
+    len: +4
+    capacity: +8
+    growth events: +1
+    operations: +4
+```
+
 ## Optional evidence persistence
 
 RIG does not write files automatically. Default RIG behavior remains fully in-memory: `Arena::new()`, `RigVec` and `RigString` operations, `arena.report()`, `arena.snapshot()`, and `arena.report_json()` do not create files, logs, `.rig/`, or background output.
@@ -97,7 +132,7 @@ assert_eq!(loaded, arena.snapshot());
 cargo run --example demo
 ```
 
-The v0.4.0 demo creates tracked vectors and strings, prints the readable report, prints the JSON report, explicitly writes the report to a temp file, loads it back, and verifies the loaded report equals the live snapshot.
+The v0.5.0 demo creates report A, mutates tracked containers, creates report B, prints the readable report, prints the JSON report, prints the human diff, prints the JSON diff, explicitly writes the report to a temp file, loads it back, and verifies the loaded report equals the live snapshot.
 
 ```text
 Rust is still safe, but allocation and growth behavior is now visible.
@@ -158,9 +193,9 @@ RIG is not:
 - a macro system
 - custom allocator internals
 
-## Smoke tests that matter in v0.4.0
+## Smoke tests that matter in v0.5.0
 
-The v0.4.0 smoke tests prove real capability:
+The v0.5.0 smoke tests prove real capability:
 
 - arenas can be named and reported
 - tracked vectors and strings start empty and remain usable as normal Rust containers
@@ -175,4 +210,9 @@ The v0.4.0 smoke tests prove real capability:
 - explicit `write_json` creates or overwrites a programmer-selected report file
 - `Arena::load_report` loads persisted reports and distinguishes IO errors from JSON errors
 - in-memory report APIs do not create files implicitly
+- identical reports produce zero diff deltas
+- added and removed containers are detected
+- length, capacity, growth event, and operation increases are detected
+- JSON diffs parse and round-trip as `ArenaDiff`
+- human diffs are readable and inspectable
 - the repository does not contain a fake `vendor/` dependency tree
