@@ -321,3 +321,21 @@ RIG v0.8.0 adds deterministic workload examples that use the same tracked contai
 - Pathfinding: tracks frontier, visited nodes, parent edges, reconstructed path nodes, and a search log while running deterministic breadth-first search on a grid graph.
 
 Each example prints human reports, JSON reports, diffs, and growth history. These examples are intentionally deterministic, require no external files, and do not write reports unless a programmer explicitly adds persistence code.
+
+## Allocation policy experiments
+
+RIG v0.9.0 begins the path from allocation visibility toward allocation control. The new `GrowthPolicy` API lets developers run the same workload under explicit container-growth strategies and compare the consequences in reports.
+
+These policies do **not** replace Rust's allocator and do not fake allocator metrics. They control when `RigVec` and `RigString` reserve capacity before a push or append, then RIG reports the actual observed capacity after Rust has performed the allocation.
+
+Available policies:
+
+- `RustDefault` keeps the previous behavior and lets `Vec` or `String` grow normally.
+- `Double` reserves before growth so requested capacity is at least doubled, starting at at least 4 from zero capacity.
+- `Exact` reserves exactly enough for the next needed length, while still reporting the actual capacity Rust provides.
+- `ReserveAhead(n)` reserves enough for the needed length plus `n` spare capacity and records `ReserveAhead(n)` in reports.
+- `Capped { max_capacity }` refuses growth beyond the cap through fallible APIs.
+
+Use `RigVec::try_push` and `RigString::try_push_str` with capped containers to receive a typed `RigError::CapacityLimitExceeded` instead of relying on panic-only behavior. The ergonomic `push` and `push_str` methods remain available, but they panic clearly if a capped policy refuses growth.
+
+This is a safe Rust bridge toward Zig-like explicit allocation thinking: choose a growth policy, run a real workload, inspect the observed growth events and current capacity, and make evidence-backed decisions without hidden files, automatic persistence, macros, async machinery, or a CLI.

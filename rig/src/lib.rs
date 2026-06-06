@@ -132,6 +132,98 @@ impl ContainerKind {
     }
 }
 
+/// Capacity reservation strategy used by tracked RIG containers before growth.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GrowthPolicy {
+    /// Preserve standard Rust `Vec` and `String` growth behavior.
+    RustDefault,
+    /// Reserve before growth so the requested capacity is at least double the current capacity.
+    Double,
+    /// Reserve exactly enough additional capacity for the requested operation.
+    Exact,
+    /// Reserve enough capacity for the requested operation plus the configured spare capacity.
+    ReserveAhead(usize),
+    /// Refuse operations that would require capacity above `max_capacity`.
+    Capped {
+        /// Maximum capacity this tracked container may grow to through fallible operations.
+        max_capacity: usize,
+    },
+}
+
+impl GrowthPolicy {
+    fn report_name(&self) -> String {
+        match self {
+            Self::RustDefault => "RustDefault".to_owned(),
+            Self::Double => "Double".to_owned(),
+            Self::Exact => "Exact".to_owned(),
+            Self::ReserveAhead(amount) => format!("ReserveAhead({amount})"),
+            Self::Capped { max_capacity } => format!("Capped(max_capacity={max_capacity})"),
+        }
+    }
+
+    fn checked_target(
+        &self,
+        container_name: &str,
+        current_capacity: usize,
+        requested_len: usize,
+    ) -> Result<Option<usize>, RigError> {
+        if requested_len <= current_capacity {
+            return Ok(None);
+        }
+
+        match self {
+            Self::RustDefault => Ok(None),
+            Self::Double => Ok(Some(
+                current_capacity.saturating_mul(2).max(4).max(requested_len),
+            )),
+            Self::Exact => Ok(Some(requested_len)),
+            Self::ReserveAhead(amount) => Ok(Some(requested_len.saturating_add(*amount))),
+            Self::Capped { max_capacity } => {
+                if requested_len > *max_capacity {
+                    Err(RigError::CapacityLimitExceeded {
+                        container_name: container_name.to_owned(),
+                        requested_capacity: requested_len,
+                        max_capacity: *max_capacity,
+                    })
+                } else {
+                    Ok(Some(requested_len))
+                }
+            }
+        }
+    }
+}
+
+/// Typed RIG operation errors returned by fallible container APIs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RigError {
+    /// A capped growth policy refused an operation that would exceed its limit.
+    CapacityLimitExceeded {
+        /// Human-readable container name supplied by the caller.
+        container_name: String,
+        /// Capacity needed by the refused operation.
+        requested_capacity: usize,
+        /// Maximum capacity allowed by the container policy.
+        max_capacity: usize,
+    },
+}
+
+impl fmt::Display for RigError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::CapacityLimitExceeded {
+                container_name,
+                requested_capacity,
+                max_capacity,
+            } => write!(
+                formatter,
+                "CapacityLimitExceeded: container '{container_name}' requested capacity {requested_capacity}, but capped max_capacity is {max_capacity}"
+            ),
+        }
+    }
+}
+
+impl Error for RigError {}
+
 /// One observed live capacity-growth event for a tracked container.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GrowthEvent {
@@ -171,6 +263,8 @@ pub struct ContainerReport {
     pub len: usize,
     /// Capacity requested when the tracked container was created.
     pub initial_capacity: usize,
+    /// Human-readable growth policy used by this tracked container.
+    pub growth_policy: String,
     /// Current underlying Rust container capacity.
     pub current_capacity: usize,
     /// Number of operations that caused capacity to increase.
@@ -560,6 +654,7 @@ struct ContainerRecord {
     kind: ContainerKind,
     len: usize,
     initial_capacity: usize,
+    growth_policy: GrowthPolicy,
     capacity: usize,
     growth_events: usize,
     operation_label: &'static str,
@@ -570,7 +665,12 @@ struct ContainerRecord {
 }
 
 impl ContainerRecord {
-    fn new(name: impl Into<String>, kind: ContainerKind, initial_capacity: usize) -> Self {
+    fn new(
+        name: impl Into<String>,
+        kind: ContainerKind,
+        initial_capacity: usize,
+        growth_policy: GrowthPolicy,
+    ) -> Self {
         let (operation_label, extra_metric_label) = match kind {
             ContainerKind::RigVec => ("total pushed items", None),
             ContainerKind::RigString => ("total append operations", Some("total appended bytes")),
@@ -581,6 +681,7 @@ impl ContainerRecord {
             kind,
             len: 0,
             initial_capacity,
+            growth_policy,
             capacity: initial_capacity,
             growth_events: 0,
             operation_label,
@@ -625,11 +726,15 @@ impl Arena {
         container_name: impl Into<String>,
         kind: ContainerKind,
         initial_capacity: usize,
+        growth_policy: GrowthPolicy,
     ) -> usize {
         let mut inner = self.inner.borrow_mut();
-        inner
-            .records
-            .push(ContainerRecord::new(container_name, kind, initial_capacity));
+        inner.records.push(ContainerRecord::new(
+            container_name,
+            kind,
+            initial_capacity,
+            growth_policy,
+        ));
         inner.records.len() - 1
     }
 
@@ -697,6 +802,7 @@ impl Arena {
                 kind: record.kind.as_str().to_owned(),
                 len: record.len,
                 initial_capacity: record.initial_capacity,
+                growth_policy: record.growth_policy.report_name(),
                 current_capacity: record.capacity,
                 growth_events: record.growth_events,
                 operation_label: record.operation_label.to_owned(),
@@ -763,11 +869,12 @@ impl Arena {
 
         for record in &snapshot.containers {
             report.push_str(&format!(
-                "\n  Container: {}\n  kind: {}\n  fields:\n    len: {}\n    initial capacity: {}\n    current capacity: {}\n    growth events: {}\n    {}: {}",
+                "\n  Container: {}\n  kind: {}\n  fields:\n    len: {}\n    initial capacity: {}\n    growth policy: {}\n    current capacity: {}\n    growth events: {}\n    {}: {}",
                 record.name,
                 record.kind,
                 record.len,
                 record.initial_capacity,
+                record.growth_policy,
                 record.current_capacity,
                 record.growth_events,
                 record.operation_label,
@@ -806,6 +913,8 @@ pub struct RigVec<T> {
     values: Vec<T>,
     arena: Arena,
     record_id: usize,
+    container_name: String,
+    growth_policy: GrowthPolicy,
     growth_events: usize,
     total_pushed: usize,
 }
@@ -816,17 +925,44 @@ impl<T> RigVec<T> {
         Self::with_capacity(arena, container_name, 0)
     }
 
+    /// Create a tracked vector record inside an arena using a growth policy.
+    pub fn with_policy(
+        arena: &mut Arena,
+        container_name: impl Into<String>,
+        policy: GrowthPolicy,
+    ) -> Self {
+        Self::with_capacity_and_policy(arena, container_name, 0, policy)
+    }
+
     /// Create a tracked vector record inside an arena with preallocated capacity.
     pub fn with_capacity(
         arena: &mut Arena,
         container_name: impl Into<String>,
         capacity: usize,
     ) -> Self {
-        let record_id = arena.add_record(container_name, ContainerKind::RigVec, capacity);
+        Self::with_capacity_and_policy(arena, container_name, capacity, GrowthPolicy::RustDefault)
+    }
+
+    /// Create a tracked vector record with preallocated capacity and a growth policy.
+    pub fn with_capacity_and_policy(
+        arena: &mut Arena,
+        container_name: impl Into<String>,
+        capacity: usize,
+        policy: GrowthPolicy,
+    ) -> Self {
+        let container_name = container_name.into();
+        let record_id = arena.add_record(
+            container_name.clone(),
+            ContainerKind::RigVec,
+            capacity,
+            policy.clone(),
+        );
         let vec = Self {
             values: Vec::with_capacity(capacity),
             arena: arena.clone(),
             record_id,
+            container_name,
+            growth_policy: policy,
             growth_events: 0,
             total_pushed: 0,
         };
@@ -835,11 +971,48 @@ impl<T> RigVec<T> {
     }
 
     /// Push an item into the underlying `Vec<T>` and record capacity growth.
+    ///
+    /// For capped containers, this panics with a clear message if the operation
+    /// would exceed the configured capacity. Use [`RigVec::try_push`] to handle
+    /// that failure without panicking.
     pub fn push(&mut self, value: T) {
+        self.try_push(value)
+            .expect("RigVec::push failed because growth policy refused capacity growth")
+    }
+
+    /// Fallibly push an item into the underlying `Vec<T>` and record capacity growth.
+    pub fn try_push(&mut self, value: T) -> Result<(), RigError> {
         let old_capacity = self.values.capacity();
+        let needed_len = self.values.len().saturating_add(1);
+        self.reserve_for_needed_len(needed_len)?;
         self.values.push(value);
         self.total_pushed += 1;
+        self.record_growth_if_needed(old_capacity);
+        self.sync_record();
+        Ok(())
+    }
 
+    fn reserve_for_needed_len(&mut self, needed_len: usize) -> Result<(), RigError> {
+        if let Some(target_capacity) = self.growth_policy.checked_target(
+            &self.container_name,
+            self.values.capacity(),
+            needed_len,
+        )? {
+            let additional = target_capacity.saturating_sub(self.values.len());
+            match self.growth_policy {
+                GrowthPolicy::Exact | GrowthPolicy::Capped { .. } => {
+                    self.values.reserve_exact(additional);
+                }
+                GrowthPolicy::Double | GrowthPolicy::ReserveAhead(_) => {
+                    self.values.reserve(additional);
+                }
+                GrowthPolicy::RustDefault => {}
+            }
+        }
+        Ok(())
+    }
+
+    fn record_growth_if_needed(&mut self, old_capacity: usize) {
         let new_capacity = self.values.capacity();
         if new_capacity > old_capacity {
             self.growth_events += 1;
@@ -850,8 +1023,6 @@ impl<T> RigVec<T> {
                 self.total_pushed,
             );
         }
-
-        self.sync_record();
     }
 
     /// Return the number of items currently stored.
@@ -897,6 +1068,8 @@ pub struct RigString {
     value: String,
     arena: Arena,
     record_id: usize,
+    container_name: String,
+    growth_policy: GrowthPolicy,
     growth_events: usize,
     append_operations: usize,
     total_appended_bytes: usize,
@@ -908,17 +1081,44 @@ impl RigString {
         Self::with_capacity(arena, container_name, 0)
     }
 
+    /// Create a tracked string record inside an arena using a growth policy.
+    pub fn with_policy(
+        arena: &mut Arena,
+        container_name: impl Into<String>,
+        policy: GrowthPolicy,
+    ) -> Self {
+        Self::with_capacity_and_policy(arena, container_name, 0, policy)
+    }
+
     /// Create a tracked string record inside an arena with preallocated capacity.
     pub fn with_capacity(
         arena: &mut Arena,
         container_name: impl Into<String>,
         capacity: usize,
     ) -> Self {
-        let record_id = arena.add_record(container_name, ContainerKind::RigString, capacity);
+        Self::with_capacity_and_policy(arena, container_name, capacity, GrowthPolicy::RustDefault)
+    }
+
+    /// Create a tracked string record with preallocated capacity and a growth policy.
+    pub fn with_capacity_and_policy(
+        arena: &mut Arena,
+        container_name: impl Into<String>,
+        capacity: usize,
+        policy: GrowthPolicy,
+    ) -> Self {
+        let container_name = container_name.into();
+        let record_id = arena.add_record(
+            container_name.clone(),
+            ContainerKind::RigString,
+            capacity,
+            policy.clone(),
+        );
         let string = Self {
             value: String::with_capacity(capacity),
             arena: arena.clone(),
             record_id,
+            container_name,
+            growth_policy: policy,
             growth_events: 0,
             append_operations: 0,
             total_appended_bytes: 0,
@@ -928,12 +1128,49 @@ impl RigString {
     }
 
     /// Append a string slice and record capacity growth.
+    ///
+    /// For capped strings, this panics with a clear message if the operation
+    /// would exceed the configured capacity. Use [`RigString::try_push_str`] to
+    /// handle that failure without panicking.
     pub fn push_str(&mut self, value: &str) {
+        self.try_push_str(value)
+            .expect("RigString::push_str failed because growth policy refused capacity growth")
+    }
+
+    /// Fallibly append a string slice and record capacity growth.
+    pub fn try_push_str(&mut self, value: &str) -> Result<(), RigError> {
         let old_capacity = self.value.capacity();
+        let needed_len = self.value.len().saturating_add(value.len());
+        self.reserve_for_needed_len(needed_len)?;
         self.value.push_str(value);
         self.append_operations += 1;
         self.total_appended_bytes += value.len();
+        self.record_growth_if_needed(old_capacity);
+        self.sync_record();
+        Ok(())
+    }
 
+    fn reserve_for_needed_len(&mut self, needed_len: usize) -> Result<(), RigError> {
+        if let Some(target_capacity) = self.growth_policy.checked_target(
+            &self.container_name,
+            self.value.capacity(),
+            needed_len,
+        )? {
+            let additional = target_capacity.saturating_sub(self.value.len());
+            match self.growth_policy {
+                GrowthPolicy::Exact | GrowthPolicy::Capped { .. } => {
+                    self.value.reserve_exact(additional);
+                }
+                GrowthPolicy::Double | GrowthPolicy::ReserveAhead(_) => {
+                    self.value.reserve(additional);
+                }
+                GrowthPolicy::RustDefault => {}
+            }
+        }
+        Ok(())
+    }
+
+    fn record_growth_if_needed(&mut self, old_capacity: usize) {
         let new_capacity = self.value.capacity();
         if new_capacity > old_capacity {
             self.growth_events += 1;
@@ -944,8 +1181,6 @@ impl RigString {
                 self.append_operations,
             );
         }
-
-        self.sync_record();
     }
 
     /// Return the current string length in bytes.
