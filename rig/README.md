@@ -4,9 +4,9 @@ RIG is a Rust crate that brings Zig-style allocator visibility to everyday Rust 
 
 Rust keeps doing the safety work: ownership, borrowing, lifetimes, and type checking are still handled by normal Rust. RIG does not replace the compiler, invent a programming language, or implement custom allocator internals. It makes allocation and growth behavior visible at the container level so developers can see what grows over time.
 
-## What v0.3.0 proves
+## What v0.4.0 proves
 
-RIG v0.3.0 is intentionally small and real:
+RIG v0.4.0 is intentionally small and real:
 
 - `Arena` gives a human-readable name to a tracking scope.
 - `RigVec<T>` wraps a real `Vec<T>`.
@@ -16,6 +16,8 @@ RIG v0.3.0 is intentionally small and real:
 - `arena.report()` produces live allocation/growth data from tracked containers.
 - `arena.snapshot()` returns typed machine-readable report data.
 - `arena.report_json()` serializes that snapshot with real `serde_json`.
+- `arena.write_json(path)` persists a report only when explicitly called.
+- `Arena::load_report(path)` loads persisted report JSON back into an `ArenaReport`.
 
 ## Example
 
@@ -73,13 +75,29 @@ Small JSON example:
 }
 ```
 
+
+## Optional evidence persistence
+
+RIG does not write files automatically. Default RIG behavior remains fully in-memory: `Arena::new()`, `RigVec` and `RigString` operations, `arena.report()`, `arena.snapshot()`, and `arena.report_json()` do not create files, logs, `.rig/`, or background output.
+
+Persistence is opt-in. The only time RIG writes a report to disk is when the programmer explicitly calls `Arena::write_json(path)` or its clear alias `Arena::write_json_pretty(path)`. `Arena::write_json(path)` creates or overwrites the target report file with pretty JSON and returns real `std::io::Result<()>` filesystem errors.
+
+`Arena::load_report(path)` reads a report back from disk into an `ArenaReport`. It returns a typed `LoadReportError` that distinguishes filesystem IO failures from JSON deserialization failures. This lets reports survive the process for later inspection without adding automatic file generation or hidden runtime behavior.
+
+```rust
+let path = std::env::temp_dir().join("rig-report.json");
+arena.write_json(&path)?;
+let loaded = Arena::load_report(&path)?;
+assert_eq!(loaded, arena.snapshot());
+```
+
 ## Run the demo
 
 ```bash
 cargo run --example demo
 ```
 
-The v0.3.0 demo creates tracked vectors and strings, then prints the readable report, a blank line, and the JSON report.
+The v0.4.0 demo creates tracked vectors and strings, prints the readable report, prints the JSON report, explicitly writes the report to a temp file, loads it back, and verifies the loaded report equals the live snapshot.
 
 ```text
 Rust is still safe, but allocation and growth behavior is now visible.
@@ -140,9 +158,9 @@ RIG is not:
 - a macro system
 - custom allocator internals
 
-## Smoke tests that matter in v0.3.0
+## Smoke tests that matter in v0.4.0
 
-The v0.3.0 smoke tests prove real capability:
+The v0.4.0 smoke tests prove real capability:
 
 - arenas can be named and reported
 - tracked vectors and strings start empty and remain usable as normal Rust containers
@@ -154,4 +172,7 @@ The v0.3.0 smoke tests prove real capability:
 - reports preserve exact readable indentation for totals, containers, and fields
 - snapshots contain arena names, tracked container counts, totals, container kinds, capacity, and growth evidence
 - JSON reports parse with real `serde_json` and round-trip into `ArenaReport`
+- explicit `write_json` creates or overwrites a programmer-selected report file
+- `Arena::load_report` loads persisted reports and distinguishes IO errors from JSON errors
+- in-memory report APIs do not create files implicitly
 - the repository does not contain a fake `vendor/` dependency tree

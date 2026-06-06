@@ -1,5 +1,9 @@
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
+use std::error::Error;
+use std::fmt;
+use std::fs;
+use std::path::Path;
 use std::rc::Rc;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -66,6 +70,45 @@ pub struct ArenaReport {
     pub totals: ArenaTotals,
     /// Per-container allocation and operation evidence.
     pub containers: Vec<ContainerReport>,
+}
+
+/// Errors that can occur while loading a persisted [`ArenaReport`].
+#[derive(Debug)]
+pub enum LoadReportError {
+    /// The report file could not be read.
+    Io(std::io::Error),
+    /// The report file was read but did not contain valid `ArenaReport` JSON.
+    Json(serde_json::Error),
+}
+
+impl fmt::Display for LoadReportError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Io(error) => write!(formatter, "failed to read RIG report: {error}"),
+            Self::Json(error) => write!(formatter, "failed to parse RIG report JSON: {error}"),
+        }
+    }
+}
+
+impl Error for LoadReportError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Io(error) => Some(error),
+            Self::Json(error) => Some(error),
+        }
+    }
+}
+
+impl From<std::io::Error> for LoadReportError {
+    fn from(error: std::io::Error) -> Self {
+        Self::Io(error)
+    }
+}
+
+impl From<serde_json::Error> for LoadReportError {
+    fn from(error: serde_json::Error) -> Self {
+        Self::Json(error)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -211,6 +254,30 @@ impl Arena {
     pub fn report_json(&self) -> String {
         serde_json::to_string_pretty(&self.snapshot())
             .expect("serializing an ArenaReport should not fail")
+    }
+
+    /// Write the current pretty JSON report to a programmer-provided path.
+    ///
+    /// This method is explicit opt-in persistence: RIG never calls it automatically.
+    /// It creates or overwrites the target file, but it does not create missing
+    /// parent directories.
+    pub fn write_json(&self, path: impl AsRef<Path>) -> std::io::Result<()> {
+        fs::write(path, self.report_json())
+    }
+
+    /// Alias for [`Arena::write_json`].
+    ///
+    /// `write_json` already writes pretty JSON because RIG report JSON is intended
+    /// for inspection. This alias exists only to make that behavior explicit.
+    pub fn write_json_pretty(&self, path: impl AsRef<Path>) -> std::io::Result<()> {
+        self.write_json(path)
+    }
+
+    /// Load a previously persisted arena report from JSON on disk.
+    pub fn load_report(path: impl AsRef<Path>) -> Result<ArenaReport, LoadReportError> {
+        let json = fs::read_to_string(path)?;
+        let report = serde_json::from_str(&json)?;
+        Ok(report)
     }
 
     /// Return a human-readable allocation and growth report for tracked containers.

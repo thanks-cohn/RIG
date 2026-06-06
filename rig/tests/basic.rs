@@ -1,4 +1,30 @@
-use rig::{Arena, RigString, RigVec};
+use rig::{Arena, LoadReportError, RigString, RigVec};
+use std::fs;
+use std::path::PathBuf;
+
+fn temp_report_path(test_name: &str) -> PathBuf {
+    let mut path = std::env::temp_dir();
+    path.push(format!(
+        "rig-{test_name}-{}-{}.json",
+        std::process::id(),
+        std::thread::current().name().unwrap_or("unnamed")
+    ));
+    path
+}
+
+fn sample_arena(name: &str) -> Arena {
+    let mut arena = Arena::new(name);
+    let mut users = RigVec::with_capacity(&mut arena, "users", 2);
+    let mut audit = RigString::with_capacity(&mut arena, "audit_events", 8);
+
+    users.push(1);
+    users.push(2);
+    users.push(3);
+    audit.push_str("login");
+    audit.push_str(";ok");
+
+    arena
+}
 
 #[test]
 fn arena_creation_tracks_name() {
@@ -431,4 +457,159 @@ fn repository_does_not_contain_fake_vendor_directory() {
         .expect("rig crate lives under the repository root");
 
     assert!(!repo_root.join("vendor").exists());
+}
+
+#[test]
+fn write_json_writes_a_file_with_valid_arena_report_json() {
+    let path = temp_report_path("write-json-valid-report");
+    let _ = fs::remove_file(&path);
+    let arena = sample_arena("persist-proof");
+
+    arena.write_json(&path).expect("write report JSON");
+
+    assert!(path.exists(), "write_json should create the requested file");
+    let written = fs::read_to_string(&path).expect("read written report");
+    let parsed_value: serde_json::Value = serde_json::from_str(&written).expect("valid JSON");
+    let decoded: rig::ArenaReport = serde_json::from_str(&written).expect("ArenaReport JSON");
+
+    assert_eq!(parsed_value["arena_name"], "persist-proof");
+    assert_eq!(decoded, arena.snapshot());
+
+    let _ = fs::remove_file(&path);
+}
+
+#[test]
+fn load_report_returns_the_same_snapshot_that_was_written() {
+    let path = temp_report_path("load-report-round-trip");
+    let _ = fs::remove_file(&path);
+    let arena = sample_arena("load-proof");
+    let snapshot = arena.snapshot();
+
+    arena.write_json(&path).expect("write report JSON");
+    let loaded = Arena::load_report(&path).expect("load report JSON");
+
+    assert_eq!(loaded, snapshot);
+
+    let _ = fs::remove_file(&path);
+}
+
+#[test]
+fn write_json_overwrites_an_existing_file() {
+    let path = temp_report_path("write-json-overwrites");
+    let _ = fs::remove_file(&path);
+    fs::write(&path, "not the final report").expect("seed existing file");
+    let arena = sample_arena("overwrite-proof");
+
+    arena.write_json(&path).expect("overwrite report JSON");
+
+    let written = fs::read_to_string(&path).expect("read overwritten file");
+    let decoded: rig::ArenaReport = serde_json::from_str(&written).expect("ArenaReport JSON");
+
+    assert_ne!(written, "not the final report");
+    assert_eq!(decoded, arena.snapshot());
+
+    let _ = fs::remove_file(&path);
+}
+
+#[test]
+fn write_json_returns_io_error_when_parent_directory_is_missing() {
+    let mut missing_parent = std::env::temp_dir();
+    missing_parent.push(format!(
+        "rig-missing-parent-{}-{}",
+        std::process::id(),
+        std::thread::current().name().unwrap_or("unnamed")
+    ));
+    let path = missing_parent.join("report.json");
+    let _ = fs::remove_file(&path);
+    let _ = fs::remove_dir(&missing_parent);
+    let arena = sample_arena("missing-parent-proof");
+
+    let error = arena
+        .write_json(&path)
+        .expect_err("missing parent directory should be an IO error");
+
+    assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+    assert!(
+        !missing_parent.exists(),
+        "write_json must not create parent directories automatically"
+    );
+}
+
+#[test]
+fn load_report_returns_io_error_for_missing_file() {
+    let path = temp_report_path("load-report-missing");
+    let _ = fs::remove_file(&path);
+
+    let error = Arena::load_report(&path).expect_err("missing file should be IO error");
+
+    match error {
+        LoadReportError::Io(io_error) => {
+            assert_eq!(io_error.kind(), std::io::ErrorKind::NotFound);
+        }
+        LoadReportError::Json(json_error) => {
+            panic!("expected IO error for missing file, got JSON error: {json_error}");
+        }
+    }
+}
+
+#[test]
+fn load_report_returns_json_error_for_invalid_json_file() {
+    let path = temp_report_path("load-report-invalid-json");
+    let _ = fs::remove_file(&path);
+    fs::write(&path, "{ this is not valid JSON").expect("write invalid JSON");
+
+    let error = Arena::load_report(&path).expect_err("invalid JSON should be JSON error");
+
+    match error {
+        LoadReportError::Json(json_error) => {
+            assert!(json_error.is_syntax() || json_error.is_data());
+        }
+        LoadReportError::Io(io_error) => {
+            panic!("expected JSON error for invalid JSON, got IO error: {io_error}");
+        }
+    }
+
+    let _ = fs::remove_file(&path);
+}
+
+#[test]
+fn report_snapshot_and_report_json_do_not_create_files() {
+    let path = temp_report_path("no-implicit-persistence");
+    let _ = fs::remove_file(&path);
+    let arena = sample_arena("memory-only-proof");
+
+    let snapshot = arena.snapshot();
+    let report = arena.report();
+    let json = arena.report_json();
+
+    assert_eq!(snapshot.arena_name, "memory-only-proof");
+    assert!(report.contains("Arena: memory-only-proof"));
+    assert!(json.contains("memory-only-proof"));
+    assert!(
+        !path.exists(),
+        "in-memory report APIs must not create the temp report path"
+    );
+}
+
+#[test]
+fn write_json_pretty_is_a_clear_alias_for_write_json() {
+    let write_path = temp_report_path("write-json-alias-a");
+    let pretty_path = temp_report_path("write-json-alias-b");
+    let _ = fs::remove_file(&write_path);
+    let _ = fs::remove_file(&pretty_path);
+    let arena = sample_arena("alias-proof");
+
+    arena.write_json(&write_path).expect("write report JSON");
+    arena
+        .write_json_pretty(&pretty_path)
+        .expect("write pretty report JSON");
+
+    let written = fs::read_to_string(&write_path).expect("read write_json file");
+    let pretty = fs::read_to_string(&pretty_path).expect("read write_json_pretty file");
+
+    assert_eq!(written, pretty);
+    assert_eq!(written, arena.report_json());
+
+    let _ = fs::remove_file(&write_path);
+    let _ = fs::remove_file(&pretty_path);
 }
