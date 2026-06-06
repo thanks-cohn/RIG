@@ -1,3 +1,113 @@
+//! RIG makes allocation growth visible for a small set of Rust containers.
+//!
+//! The crate is intentionally explicit: creating an [`Arena`], pushing into
+//! tracked containers, taking snapshots, rendering reports, and computing diffs
+//! are all in-memory operations. Files are written only when the caller invokes
+//! a `write_json` method with a path.
+//!
+//! # Arena and `RigVec`
+//!
+//! ```
+//! use rig::{Arena, RigVec};
+//!
+//! let mut arena = Arena::new("request");
+//! let mut users = RigVec::with_capacity(&mut arena, "users", 2);
+//!
+//! users.push(1);
+//! users.push(2);
+//! users.push(3);
+//!
+//! let snapshot = arena.snapshot();
+//! assert_eq!(snapshot.arena_name, "request");
+//! assert_eq!(snapshot.tracked_container_count, 1);
+//! assert_eq!(snapshot.containers[0].name, "users");
+//! assert_eq!(snapshot.containers[0].kind, "RigVec");
+//! assert_eq!(snapshot.containers[0].len, 3);
+//! assert_eq!(users.total_pushed(), 3);
+//! ```
+//!
+//! # `RigString`
+//!
+//! ```
+//! use rig::{Arena, RigString};
+//!
+//! let mut arena = Arena::new("audit");
+//! let mut events = RigString::with_capacity(&mut arena, "events", 8);
+//!
+//! events.push_str("login");
+//! events.push_str(";ok");
+//!
+//! assert_eq!(events.len(), "login;ok".len());
+//! assert_eq!(events.append_operations(), 2);
+//! assert_eq!(events.total_appended_bytes(), "login;ok".len());
+//! assert_eq!(arena.snapshot().containers[0].kind, "RigString");
+//! ```
+//!
+//! # Snapshots and JSON reports
+//!
+//! ```
+//! use rig::{Arena, RigVec};
+//!
+//! let mut arena = Arena::new("json");
+//! let mut jobs = RigVec::new(&mut arena, "jobs");
+//! jobs.push(42);
+//!
+//! let snapshot = arena.snapshot();
+//! let json = snapshot.report_json();
+//! let decoded: rig::ArenaReport = serde_json::from_str(&json).unwrap();
+//!
+//! assert_eq!(decoded, snapshot);
+//! assert!(json.contains("json"));
+//! ```
+//!
+//! # Explicit persistence
+//!
+//! ```
+//! use rig::{Arena, RigVec};
+//! use std::fs;
+//!
+//! let mut arena = Arena::new("persist");
+//! let mut jobs = RigVec::new(&mut arena, "jobs");
+//! jobs.push(7);
+//!
+//! let mut path = std::env::temp_dir();
+//! path.push(format!("rig-doctest-{}-report.json", std::process::id()));
+//! let _ = fs::remove_file(&path);
+//!
+//! arena.write_json(&path).unwrap();
+//! let loaded = Arena::load_report(&path).unwrap();
+//!
+//! assert_eq!(loaded, arena.snapshot());
+//! assert!(path.exists());
+//!
+//! fs::remove_file(&path).unwrap();
+//! ```
+//!
+//! # Diffs
+//!
+//! ```
+//! use rig::{Arena, RigVec};
+//!
+//! let mut arena = Arena::new("diff");
+//! let mut jobs = RigVec::with_capacity(&mut arena, "jobs", 2);
+//! jobs.push(1);
+//! let before = arena.snapshot();
+//!
+//! jobs.push(2);
+//! jobs.push(3);
+//! let after = arena.snapshot();
+//!
+//! let diff = before.diff(&after);
+//! assert_eq!(diff.total_len_delta, 2);
+//! assert_eq!(diff.containers_changed[0].name, "jobs");
+//! assert_eq!(diff.containers_changed[0].operation_delta, 2);
+//!
+//! let decoded: rig::ArenaDiff = serde_json::from_str(&diff.diff_json()).unwrap();
+//! assert_eq!(decoded, diff);
+//! ```
+
+#![warn(missing_docs)]
+
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -132,7 +242,43 @@ pub struct ArenaDiff {
 }
 
 impl ArenaReport {
+    /// Serialize this report as pretty JSON.
+    ///
+    /// This is an in-memory operation. It does not create files and it does not
+    /// enable persistence. Use [`ArenaReport::write_json`] or
+    /// [`Arena::write_json`] when a file should be written explicitly.
+    ///
+    /// ```
+    /// use rig::{Arena, RigVec};
+    ///
+    /// let mut arena = Arena::new("json-method");
+    /// let mut values = RigVec::new(&mut arena, "values");
+    /// values.push(1);
+    ///
+    /// let report = arena.snapshot();
+    /// let json = report.report_json();
+    /// let decoded: rig::ArenaReport = serde_json::from_str(&json).unwrap();
+    ///
+    /// assert_eq!(decoded, report);
+    /// ```
+    pub fn report_json(&self) -> String {
+        serde_json::to_string_pretty(self).expect("serializing an ArenaReport should not fail")
+    }
+
+    /// Write this report as pretty JSON to a programmer-provided path.
+    ///
+    /// This is explicit opt-in persistence. RIG does not create parent
+    /// directories, background files, hidden files, or hidden directories.
+    pub fn write_json(&self, path: impl AsRef<Path>) -> std::io::Result<()> {
+        fs::write(path, self.report_json())
+    }
+
     /// Compare this earlier report with a later report.
+    ///
+    /// Containers are matched by name. Containers present only in the later
+    /// report appear in [`ArenaDiff::containers_added`], containers present only
+    /// in this report appear in [`ArenaDiff::containers_removed`], and containers
+    /// present in both reports produce a [`ContainerDiff`].
     pub fn diff(&self, after: &ArenaReport) -> ArenaDiff {
         let before_by_name: BTreeMap<&str, &ContainerReport> = self
             .containers
@@ -215,11 +361,24 @@ impl ContainerDiff {
 
 impl ArenaDiff {
     /// Return a pretty JSON diff report.
+    ///
+    /// This is an in-memory operation. It does not write files; use
+    /// [`ArenaDiff::write_json`] for explicit file persistence.
     pub fn diff_json(&self) -> String {
         serde_json::to_string_pretty(self).expect("serializing an ArenaDiff should not fail")
     }
 
+    /// Write this diff as pretty JSON to a programmer-provided path.
+    ///
+    /// This method does not create missing parent directories.
+    pub fn write_json(&self, path: impl AsRef<Path>) -> std::io::Result<()> {
+        fs::write(path, self.diff_json())
+    }
+
     /// Return a human-readable diff report.
+    ///
+    /// The report is intended for direct inspection; use [`ArenaDiff::diff_json`]
+    /// when stable machine-readable evidence is needed.
     pub fn report(&self) -> String {
         self.to_string()
     }
@@ -493,9 +652,11 @@ impl Arena {
     }
 
     /// Return a pretty JSON allocation and growth report for tracked containers.
+    ///
+    /// This is an in-memory operation equivalent to
+    /// `self.snapshot().report_json()`. It does not create files.
     pub fn report_json(&self) -> String {
-        serde_json::to_string_pretty(&self.snapshot())
-            .expect("serializing an ArenaReport should not fail")
+        self.snapshot().report_json()
     }
 
     /// Write the current pretty JSON report to a programmer-provided path.
@@ -505,14 +666,6 @@ impl Arena {
     /// parent directories.
     pub fn write_json(&self, path: impl AsRef<Path>) -> std::io::Result<()> {
         fs::write(path, self.report_json())
-    }
-
-    /// Alias for [`Arena::write_json`].
-    ///
-    /// `write_json` already writes pretty JSON because RIG report JSON is intended
-    /// for inspection. This alias exists only to make that behavior explicit.
-    pub fn write_json_pretty(&self, path: impl AsRef<Path>) -> std::io::Result<()> {
-        self.write_json(path)
     }
 
     /// Load a previously persisted arena report from JSON on disk.

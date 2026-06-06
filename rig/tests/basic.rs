@@ -12,6 +12,31 @@ fn temp_report_path(test_name: &str) -> PathBuf {
     path
 }
 
+fn temp_observation_dir(test_name: &str) -> PathBuf {
+    let mut path = std::env::temp_dir();
+    path.push(format!(
+        "rig-{test_name}-{}-{}",
+        std::process::id(),
+        std::thread::current().name().unwrap_or("unnamed")
+    ));
+    let _ = fs::remove_dir_all(&path);
+    fs::create_dir(&path).expect("create observation directory");
+    path
+}
+
+fn assert_dir_is_empty(path: &std::path::Path) {
+    let entries = fs::read_dir(path)
+        .expect("read observation directory")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("collect observation directory entries");
+    assert!(
+        entries.is_empty(),
+        "expected no filesystem entries in {}, found {:?}",
+        path.display(),
+        entries.iter().map(|entry| entry.path()).collect::<Vec<_>>()
+    );
+}
+
 fn sample_arena(name: &str) -> Arena {
     let mut arena = Arena::new(name);
     let mut users = RigVec::with_capacity(&mut arena, "users", 2);
@@ -455,8 +480,30 @@ fn repository_does_not_contain_fake_vendor_directory() {
     let repo_root = crate_dir
         .parent()
         .expect("rig crate lives under the repository root");
+    let vendor = repo_root.join("vendor");
 
-    assert!(!repo_root.join("vendor").exists());
+    assert!(
+        !vendor.exists(),
+        "repo root must not contain {}",
+        vendor.display()
+    );
+}
+
+#[test]
+fn repository_does_not_contain_placeholder_directories() {
+    let crate_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let repo_root = crate_dir
+        .parent()
+        .expect("rig crate lives under the repository root");
+
+    for directory_name in ["future", "todo", "placeholder", "stubs"] {
+        let path = repo_root.join(directory_name);
+        assert!(
+            !path.exists(),
+            "repo root must not contain placeholder directory {}",
+            path.display()
+        );
+    }
 }
 
 #[test]
@@ -474,6 +521,23 @@ fn write_json_writes_a_file_with_valid_arena_report_json() {
 
     assert_eq!(parsed_value["arena_name"], "persist-proof");
     assert_eq!(decoded, arena.snapshot());
+
+    let _ = fs::remove_file(&path);
+}
+
+#[test]
+fn arena_report_write_json_writes_valid_report_json() {
+    let path = temp_report_path("arena-report-write-json");
+    let _ = fs::remove_file(&path);
+    let report = sample_arena("report-write-proof").snapshot();
+
+    report.write_json(&path).expect("write ArenaReport JSON");
+
+    let written = fs::read_to_string(&path).expect("read ArenaReport JSON");
+    let decoded: rig::ArenaReport = serde_json::from_str(&written).expect("valid ArenaReport JSON");
+
+    assert_eq!(decoded, report);
+    assert_eq!(written, report.report_json());
 
     let _ = fs::remove_file(&path);
 }
@@ -573,6 +637,98 @@ fn load_report_returns_json_error_for_invalid_json_file() {
 }
 
 #[test]
+fn arena_new_does_not_create_files() {
+    let dir = temp_observation_dir("arena-new-no-files");
+
+    let arena = Arena::new("memory-only-new");
+
+    assert_eq!(arena.name(), "memory-only-new");
+    assert_dir_is_empty(&dir);
+
+    fs::remove_dir(&dir).expect("remove observation directory");
+}
+
+#[test]
+fn push_and_push_str_do_not_create_files() {
+    let dir = temp_observation_dir("push-no-files");
+    let mut arena = Arena::new("memory-only-push");
+    let mut users = RigVec::new(&mut arena, "users");
+    let mut audit = RigString::new(&mut arena, "audit_events");
+
+    users.push(1);
+    audit.push_str("ok");
+
+    assert_eq!(users.len(), 1);
+    assert_eq!(audit.len(), 2);
+    assert_dir_is_empty(&dir);
+
+    fs::remove_dir(&dir).expect("remove observation directory");
+}
+
+#[test]
+fn diff_and_diff_json_do_not_create_files() {
+    let dir = temp_observation_dir("diff-no-files");
+    let mut arena = Arena::new("memory-only-diff");
+    let mut users = RigVec::with_capacity(&mut arena, "users", 1);
+    users.push(1);
+    let before = arena.snapshot();
+    users.push(2);
+    let after = arena.snapshot();
+
+    let diff = before.diff(&after);
+    let json = diff.diff_json();
+
+    assert_eq!(diff.total_len_delta, 1);
+    assert!(json.contains("memory-only-diff"));
+    assert_dir_is_empty(&dir);
+
+    fs::remove_dir(&dir).expect("remove observation directory");
+}
+
+#[test]
+fn arena_report_write_json_fails_when_parent_directory_is_missing() {
+    let mut missing_parent = std::env::temp_dir();
+    missing_parent.push(format!(
+        "rig-report-missing-parent-{}-{}",
+        std::process::id(),
+        std::thread::current().name().unwrap_or("unnamed")
+    ));
+    let path = missing_parent.join("report.json");
+    let _ = fs::remove_file(&path);
+    let _ = fs::remove_dir_all(&missing_parent);
+    let report = sample_arena("report-missing-parent-proof").snapshot();
+
+    let error = report
+        .write_json(&path)
+        .expect_err("missing parent directory should be an IO error");
+
+    assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+    assert!(!missing_parent.exists());
+}
+
+#[test]
+fn arena_diff_write_json_fails_when_parent_directory_is_missing() {
+    let mut missing_parent = std::env::temp_dir();
+    missing_parent.push(format!(
+        "rig-diff-missing-parent-{}-{}",
+        std::process::id(),
+        std::thread::current().name().unwrap_or("unnamed")
+    ));
+    let path = missing_parent.join("diff.json");
+    let _ = fs::remove_file(&path);
+    let _ = fs::remove_dir_all(&missing_parent);
+    let report = sample_arena("diff-missing-parent-proof").snapshot();
+    let diff = report.diff(&report);
+
+    let error = diff
+        .write_json(&path)
+        .expect_err("missing parent directory should be an IO error");
+
+    assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+    assert!(!missing_parent.exists());
+}
+
+#[test]
 fn report_snapshot_and_report_json_do_not_create_files() {
     let path = temp_report_path("no-implicit-persistence");
     let _ = fs::remove_file(&path);
@@ -581,37 +737,16 @@ fn report_snapshot_and_report_json_do_not_create_files() {
     let snapshot = arena.snapshot();
     let report = arena.report();
     let json = arena.report_json();
+    let snapshot_json = snapshot.report_json();
 
     assert_eq!(snapshot.arena_name, "memory-only-proof");
     assert!(report.contains("Arena: memory-only-proof"));
     assert!(json.contains("memory-only-proof"));
+    assert_eq!(snapshot_json, json);
     assert!(
         !path.exists(),
         "in-memory report APIs must not create the temp report path"
     );
-}
-
-#[test]
-fn write_json_pretty_is_a_clear_alias_for_write_json() {
-    let write_path = temp_report_path("write-json-alias-a");
-    let pretty_path = temp_report_path("write-json-alias-b");
-    let _ = fs::remove_file(&write_path);
-    let _ = fs::remove_file(&pretty_path);
-    let arena = sample_arena("alias-proof");
-
-    arena.write_json(&write_path).expect("write report JSON");
-    arena
-        .write_json_pretty(&pretty_path)
-        .expect("write pretty report JSON");
-
-    let written = fs::read_to_string(&write_path).expect("read write_json file");
-    let pretty = fs::read_to_string(&pretty_path).expect("read write_json_pretty file");
-
-    assert_eq!(written, pretty);
-    assert_eq!(written, arena.report_json());
-
-    let _ = fs::remove_file(&write_path);
-    let _ = fs::remove_file(&pretty_path);
 }
 
 #[test]
@@ -798,6 +933,31 @@ fn json_diff_valid() {
     assert_eq!(value["before_arena_name"], "json-diff-proof");
     assert_eq!(value["containers_changed"][0]["name"], "users");
     assert_eq!(decoded, diff);
+}
+
+#[test]
+fn diff_write_json_round_trips_as_valid_diff_json() {
+    let path = temp_report_path("diff-write-json-round-trip");
+    let _ = fs::remove_file(&path);
+    let mut arena = Arena::new("diff-write-proof");
+    let mut users = RigVec::with_capacity(&mut arena, "users", 2);
+    users.push(1);
+    let before = arena.snapshot();
+    users.push(2);
+    users.push(3);
+    let diff = before.diff(&arena.snapshot());
+
+    diff.write_json(&path).expect("write diff JSON");
+
+    let written = fs::read_to_string(&path).expect("read diff JSON");
+    let value: serde_json::Value = serde_json::from_str(&written).expect("valid JSON value");
+    let decoded: rig::ArenaDiff = serde_json::from_str(&written).expect("valid ArenaDiff JSON");
+
+    assert_eq!(value["before_arena_name"], "diff-write-proof");
+    assert_eq!(decoded, diff);
+    assert_eq!(written, diff.diff_json());
+
+    let _ = fs::remove_file(&path);
 }
 
 #[test]

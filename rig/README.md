@@ -4,9 +4,9 @@ RIG is a Rust crate that brings Zig-style allocator visibility to everyday Rust 
 
 Rust keeps doing the safety work: ownership, borrowing, lifetimes, and type checking are still handled by normal Rust. RIG does not replace the compiler, invent a programming language, or implement custom allocator internals. It makes allocation and growth behavior visible at the container level so developers can see what grows over time.
 
-## What v0.5.0 proves
+## What v0.6.0 proves
 
-RIG v0.5.0 is intentionally small and real:
+RIG v0.6.0 is intentionally small and real:
 
 - `Arena` gives a human-readable name to a tracking scope.
 - `RigVec<T>` wraps a real `Vec<T>`.
@@ -85,7 +85,7 @@ Small JSON example:
 
 ## Evidence comparison
 
-RIG v0.5.0 explains change between two reports without adding a CLI, macros, async work, background services, automatic persistence, or hidden files.
+RIG v0.6.0 explains change between two reports without adding a CLI, macros, async work, background services, automatic persistence, or hidden files.
 
 ```rust
 let before = arena.snapshot();
@@ -115,7 +115,7 @@ Changed containers:
 
 RIG does not write files automatically. Default RIG behavior remains fully in-memory: `Arena::new()`, `RigVec` and `RigString` operations, `arena.report()`, `arena.snapshot()`, and `arena.report_json()` do not create files, logs, `.rig/`, or background output.
 
-Persistence is opt-in. The only time RIG writes a report to disk is when the programmer explicitly calls `Arena::write_json(path)` or its clear alias `Arena::write_json_pretty(path)`. `Arena::write_json(path)` creates or overwrites the target report file with pretty JSON and returns real `std::io::Result<()>` filesystem errors.
+Persistence is opt-in. The only time RIG writes a report to disk is when the programmer explicitly calls `Arena::write_json(path)`. `Arena::write_json(path)` creates or overwrites the target report file with pretty JSON and returns real `std::io::Result<()>` filesystem errors.
 
 `Arena::load_report(path)` reads a report back from disk into an `ArenaReport`. It returns a typed `LoadReportError` that distinguishes filesystem IO failures from JSON deserialization failures. This lets reports survive the process for later inspection without adding automatic file generation or hidden runtime behavior.
 
@@ -126,13 +126,21 @@ let loaded = Arena::load_report(&path)?;
 assert_eq!(loaded, arena.snapshot());
 ```
 
+## Path to v1
+
+RIG v0.6.0 is public API hardening for the path to a real v1. It does not add a CLI, macros, async work, background services, automatic persistence, or hidden project files. The point of this release is to make the API shape intentional, documented, and resistant to misuse.
+
+A real v1 requires stable public API shape, useful rustdoc for exported types and methods, compiling doc tests for normal workflows, and abuse tests that prove RIG stays explicit under pressure. RIG still avoids hidden behavior: reports, snapshots, JSON rendering, and diffs remain in memory unless the programmer explicitly chooses a `write_json` path.
+
+---
+
 ## Run the demo
 
 ```bash
 cargo run --example demo
 ```
 
-The v0.5.0 demo creates report A, mutates tracked containers, creates report B, prints the readable report, prints the JSON report, prints the human diff, prints the JSON diff, explicitly writes the report to a temp file, loads it back, and verifies the loaded report equals the live snapshot.
+The v0.6.0 demo creates report A, mutates tracked containers, creates report B, prints the readable report, prints the JSON report, prints the human diff, prints the JSON diff, explicitly writes the report to a temp file, loads it back, and verifies the loaded report equals the live snapshot.
 
 ```text
 Rust is still safe, but allocation and growth behavior is now visible.
@@ -193,9 +201,9 @@ RIG is not:
 - a macro system
 - custom allocator internals
 
-## Smoke tests that matter in v0.5.0
+## Smoke tests that matter in v0.6.0
 
-The v0.5.0 smoke tests prove real capability:
+The v0.6.0 smoke tests prove real capability:
 
 - arenas can be named and reported
 - tracked vectors and strings start empty and remain usable as normal Rust containers
