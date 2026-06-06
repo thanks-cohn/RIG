@@ -1,24 +1,6 @@
 # RIG commands
 
-```bash
-# Go to the repository root used by the main development checkout.
-cd ~/dev/RIG
-```
 
-```bash
-# Go directly to the Rust crate directory.
-cd ~/dev/RIG/rig
-```
-
-```bash
-# Show changed, staged, and untracked files.
-git status
-```
-
-```bash
-# Update the local main branch from the origin remote.
-git pull origin main
-```
 
 ```bash
 # Check Rust formatting without rewriting files.
@@ -68,19 +50,4 @@ cargo clippy --manifest-path rig/Cargo.toml -- -D warnings
 ```bash
 # Remove Cargo build artifacts when a clean rebuild is needed.
 cargo clean
-```
-
-```bash
-# Stage all current file changes for commit.
-git add .
-```
-
-```bash
-# Commit staged changes with a replacement message.
-git commit -m "message here"
-```
-
-```bash
-# Push the local main branch to origin.
-git push origin main
 ```
