@@ -239,6 +239,46 @@ pub struct GrowthEvent {
     pub operation_index: usize,
 }
 
+/// Compact machine-readable summary derived from raw [`GrowthEvent`] evidence.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GrowthSummary {
+    /// Total number of raw growth events summarized.
+    pub total_growth_events: usize,
+    /// Number of containers that have at least one growth event.
+    pub containers_with_growth: usize,
+    /// Largest single-event capacity increase (`new_capacity - old_capacity`).
+    pub largest_growth_delta: usize,
+    /// Container name for the largest single-event capacity increase, if any.
+    pub largest_growth_container: Option<String>,
+    /// First growth event in the raw growth history, if any.
+    pub first_growth_event: Option<GrowthEvent>,
+    /// Last growth event in the raw growth history, if any.
+    pub last_growth_event: Option<GrowthEvent>,
+    /// Per-container summaries derived from the same raw growth history.
+    pub per_container: Vec<ContainerGrowthSummary>,
+}
+
+/// Compact growth evidence summary for one container.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContainerGrowthSummary {
+    /// Human-readable container name supplied by the caller.
+    pub container_name: String,
+    /// RIG container wrapper kind, such as `RigVec` or `RigString`.
+    pub container_kind: String,
+    /// Number of raw growth events for this container.
+    pub growth_events: usize,
+    /// Capacity before this container's first growth event.
+    pub first_old_capacity: usize,
+    /// Capacity after this container's final growth event.
+    pub final_new_capacity: usize,
+    /// Largest single-event capacity increase for this container.
+    pub largest_growth_delta: usize,
+    /// Operation index for this container's first growth event.
+    pub first_operation_index: usize,
+    /// Operation index for this container's last growth event.
+    pub last_operation_index: usize,
+}
+
 /// Machine-readable totals for all containers tracked by an [`Arena`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ArenaTotals {
@@ -355,6 +395,27 @@ pub struct ArenaDiff {
 }
 
 impl ArenaReport {
+    /// Return a compact summary derived from this report's raw growth history.
+    pub fn growth_summary(&self) -> GrowthSummary {
+        summarize_growth_events(&self.growth_history)
+    }
+
+    /// Serialize the compact growth summary as pretty JSON.
+    pub fn growth_summary_json(&self) -> String {
+        serde_json::to_string_pretty(&self.growth_summary())
+            .expect("serializing a GrowthSummary should not fail")
+    }
+
+    /// Return a compact human-readable allocation and growth report.
+    pub fn report(&self) -> String {
+        render_arena_report(self, GrowthHistoryMode::Compact)
+    }
+
+    /// Return a verbose human-readable report with the full raw growth history.
+    pub fn report_verbose(&self) -> String {
+        render_arena_report(self, GrowthHistoryMode::Verbose)
+    }
+
     /// Serialize this report as pretty JSON.
     ///
     /// This is an in-memory operation. It does not create files and it does not
@@ -502,6 +563,11 @@ impl ArenaDiff {
     pub fn report(&self) -> String {
         self.to_string()
     }
+
+    /// Return a compact summary for growth events added by this diff.
+    pub fn growth_summary(&self) -> GrowthSummary {
+        summarize_growth_events(&self.growth_events_added)
+    }
 }
 
 impl fmt::Display for ArenaDiff {
@@ -591,6 +657,201 @@ impl fmt::Display for ArenaDiff {
 
         Ok(())
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GrowthHistoryMode {
+    Compact,
+    Verbose,
+}
+
+fn summarize_growth_events(events: &[GrowthEvent]) -> GrowthSummary {
+    let mut per_container: BTreeMap<(String, String), ContainerGrowthSummary> = BTreeMap::new();
+    let mut largest_growth_delta = 0;
+    let mut largest_growth_container = None;
+
+    for event in events {
+        let delta = event.new_capacity.saturating_sub(event.old_capacity);
+        if delta > largest_growth_delta {
+            largest_growth_delta = delta;
+            largest_growth_container = Some(event.container_name.clone());
+        }
+
+        let key = (event.container_name.clone(), event.container_kind.clone());
+        per_container
+            .entry(key)
+            .and_modify(|summary| {
+                summary.growth_events += 1;
+                summary.final_new_capacity = event.new_capacity;
+                summary.largest_growth_delta = summary.largest_growth_delta.max(delta);
+                summary.last_operation_index = event.operation_index;
+            })
+            .or_insert_with(|| ContainerGrowthSummary {
+                container_name: event.container_name.clone(),
+                container_kind: event.container_kind.clone(),
+                growth_events: 1,
+                first_old_capacity: event.old_capacity,
+                final_new_capacity: event.new_capacity,
+                largest_growth_delta: delta,
+                first_operation_index: event.operation_index,
+                last_operation_index: event.operation_index,
+            });
+    }
+
+    GrowthSummary {
+        total_growth_events: events.len(),
+        containers_with_growth: per_container.len(),
+        largest_growth_delta,
+        largest_growth_container,
+        first_growth_event: events.first().cloned(),
+        last_growth_event: events.last().cloned(),
+        per_container: per_container.into_values().collect(),
+    }
+}
+
+fn render_arena_report(snapshot: &ArenaReport, mode: GrowthHistoryMode) -> String {
+    let mut report = format!(
+        "RIG allocation report\nArena: {}\nTracked containers: {}\nTotals:\n  total len: {}\n  total current capacity: {}\n  total growth events: {}\n  total pushed/appended operations: {}\nContainers:",
+        snapshot.arena_name,
+        snapshot.tracked_container_count,
+        snapshot.totals.total_len,
+        snapshot.totals.total_current_capacity,
+        snapshot.totals.total_growth_events,
+        snapshot.totals.total_pushed_appended_operations
+    );
+
+    if snapshot.containers.is_empty() {
+        report.push_str("\n  (none)");
+    }
+
+    for record in &snapshot.containers {
+        report.push_str(&format!(
+            "\n  Container: {}\n  kind: {}\n  fields:\n    len: {}\n    initial capacity: {}\n    growth policy: {}\n    current capacity: {}\n    growth events: {}\n    {}: {}",
+            record.name,
+            record.kind,
+            record.len,
+            record.initial_capacity,
+            record.growth_policy,
+            record.current_capacity,
+            record.growth_events,
+            record.operation_label,
+            record.total_operations
+        ));
+
+        if let (Some(label), Some(value)) = (&record.extra_metric_label, record.extra_metric_value)
+        {
+            report.push_str(&format!("\n    {}: {}", label, value));
+        }
+    }
+
+    render_growth_summary(snapshot, &mut report);
+    match mode {
+        GrowthHistoryMode::Compact => render_compact_growth_history(snapshot, &mut report),
+        GrowthHistoryMode::Verbose => render_verbose_growth_history(snapshot, &mut report),
+    }
+    report
+}
+
+fn render_growth_summary(snapshot: &ArenaReport, report: &mut String) {
+    let summary = snapshot.growth_summary();
+    report.push_str("\nGrowth history summary:");
+    report.push_str(&format!(
+        "\n  total_growth_events: {}\n  containers_with_growth: {}\n  largest_growth_delta: {}\n  largest_growth_container: {}",
+        summary.total_growth_events,
+        summary.containers_with_growth,
+        summary.largest_growth_delta,
+        summary.largest_growth_container.as_deref().unwrap_or("(none)")
+    ));
+    if let Some(event) = &summary.first_growth_event {
+        report.push_str(&format!(
+            "\n  first_growth_event: {} {} -> {} at operation {}",
+            event.container_name, event.old_capacity, event.new_capacity, event.operation_index
+        ));
+    } else {
+        report.push_str("\n  first_growth_event: (none)");
+    }
+    if let Some(event) = &summary.last_growth_event {
+        report.push_str(&format!(
+            "\n  last_growth_event: {} {} -> {} at operation {}",
+            event.container_name, event.old_capacity, event.new_capacity, event.operation_index
+        ));
+    } else {
+        report.push_str("\n  last_growth_event: (none)");
+    }
+    report.push_str("\n  per_container:");
+    if summary.per_container.is_empty() {
+        report.push_str("\n    (none)");
+    } else {
+        for container in &summary.per_container {
+            report.push_str(&format!(
+                "\n    {} ({}): growth_events={}, first_old_capacity={}, final_new_capacity={}, largest_growth_delta={}, first_operation_index={}, last_operation_index={}",
+                container.container_name,
+                container.container_kind,
+                container.growth_events,
+                container.first_old_capacity,
+                container.final_new_capacity,
+                container.largest_growth_delta,
+                container.first_operation_index,
+                container.last_operation_index
+            ));
+        }
+    }
+}
+
+fn render_compact_growth_history(snapshot: &ArenaReport, report: &mut String) {
+    const EDGE_EVENT_COUNT: usize = 3;
+    report.push_str("\nGrowth history preview:");
+    if snapshot.growth_history.is_empty() {
+        report.push_str("\n  (none)");
+        return;
+    }
+
+    let event_count = snapshot.growth_history.len();
+    let head_count = event_count.min(EDGE_EVENT_COUNT);
+    report.push_str("\n  first events:");
+    for event in snapshot.growth_history.iter().take(head_count) {
+        append_growth_event_line(report, event);
+    }
+
+    if event_count > EDGE_EVENT_COUNT {
+        let tail_count = (event_count - head_count).min(EDGE_EVENT_COUNT);
+        let omitted = event_count - head_count - tail_count;
+        if omitted > 0 {
+            report.push_str(&format!(
+                "\n  ... {omitted} growth events omitted from compact report ..."
+            ));
+        }
+        report.push_str("\n  last events:");
+        for event in snapshot
+            .growth_history
+            .iter()
+            .skip(event_count - tail_count)
+        {
+            append_growth_event_line(report, event);
+        }
+    }
+
+    report.push_str(
+        "\n  Full raw growth history is available through report_verbose() and report_json().",
+    );
+}
+
+fn render_verbose_growth_history(snapshot: &ArenaReport, report: &mut String) {
+    report.push_str("\nGrowth history (full raw evidence):");
+    if snapshot.growth_history.is_empty() {
+        report.push_str("\n  (none)");
+    } else {
+        for event in &snapshot.growth_history {
+            append_growth_event_line(report, event);
+        }
+    }
+}
+
+fn append_growth_event_line(report: &mut String, event: &GrowthEvent) {
+    report.push_str(&format!(
+        "\n  {}: {} -> {} at operation {}",
+        event.container_name, event.old_capacity, event.new_capacity, event.operation_index
+    ));
 }
 
 fn signed_delta(before: usize, after: usize) -> i64 {
@@ -850,60 +1111,24 @@ impl Arena {
         Ok(report)
     }
 
-    /// Return a human-readable allocation and growth report for tracked containers.
+    /// Return a compact human-readable allocation and growth report for tracked containers.
     pub fn report(&self) -> String {
-        let snapshot = self.snapshot();
-        let mut report = format!(
-            "RIG allocation report\nArena: {}\nTracked containers: {}\nTotals:\n  total len: {}\n  total current capacity: {}\n  total growth events: {}\n  total pushed/appended operations: {}\nContainers:",
-            snapshot.arena_name,
-            snapshot.tracked_container_count,
-            snapshot.totals.total_len,
-            snapshot.totals.total_current_capacity,
-            snapshot.totals.total_growth_events,
-            snapshot.totals.total_pushed_appended_operations
-        );
+        self.snapshot().report()
+    }
 
-        if snapshot.containers.is_empty() {
-            report.push_str("\n  (none)");
-        }
+    /// Return a verbose human-readable report with the full raw growth history.
+    pub fn report_verbose(&self) -> String {
+        self.snapshot().report_verbose()
+    }
 
-        for record in &snapshot.containers {
-            report.push_str(&format!(
-                "\n  Container: {}\n  kind: {}\n  fields:\n    len: {}\n    initial capacity: {}\n    growth policy: {}\n    current capacity: {}\n    growth events: {}\n    {}: {}",
-                record.name,
-                record.kind,
-                record.len,
-                record.initial_capacity,
-                record.growth_policy,
-                record.current_capacity,
-                record.growth_events,
-                record.operation_label,
-                record.total_operations
-            ));
+    /// Return a compact summary derived from the current raw growth history.
+    pub fn growth_summary(&self) -> GrowthSummary {
+        self.snapshot().growth_summary()
+    }
 
-            if let (Some(label), Some(value)) =
-                (&record.extra_metric_label, record.extra_metric_value)
-            {
-                report.push_str(&format!("\n    {}: {}", label, value));
-            }
-        }
-
-        report.push_str("\nGrowth history:");
-        if snapshot.growth_history.is_empty() {
-            report.push_str("\n  (none)");
-        } else {
-            for event in &snapshot.growth_history {
-                report.push_str(&format!(
-                    "\n  {}: {} -> {} at operation {}",
-                    event.container_name,
-                    event.old_capacity,
-                    event.new_capacity,
-                    event.operation_index
-                ));
-            }
-        }
-
-        report
+    /// Serialize the compact growth summary as pretty JSON.
+    pub fn growth_summary_json(&self) -> String {
+        self.snapshot().growth_summary_json()
     }
 }
 

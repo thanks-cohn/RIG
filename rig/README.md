@@ -260,3 +260,21 @@ The policies are:
 Capped containers are intentionally fallible: `RigVec::try_push` and `RigString::try_push_str` return `RigError::CapacityLimitExceeded` with the container name, requested capacity, and maximum capacity. The existing `push` and `push_str` methods preserve ergonomic use and panic clearly only when a capped policy refuses the operation.
 
 This keeps RIG safe and honest. Policies influence reservation timing, while reports keep using real observed capacities rather than planned or invented numbers. Persistence remains explicit opt-in through `write_json`; no hidden files or automatic persistence are added.
+
+## Readable evidence summaries
+
+RIG v0.10.0 keeps raw allocation-growth evidence while making human reports readable for large real workloads. `ArenaReport` still contains the full `growth_history` vector for machines, JSON reports still include that raw history, and no evidence is deleted or replaced by a shortcut metric.
+
+Human reports now summarize growth by default. `arena.report()` and `ArenaReport::report()` show the normal allocation report, a `GrowthSummary`, per-container growth summaries, the first few growth events, and the last few growth events. If a policy such as `Exact` creates 50,000 growth events, the default report explains the evidence without flooding the console.
+
+Verbose reports expose the full raw history when a human needs every event:
+
+```rust
+let compact = arena.report();
+let verbose = arena.report_verbose();
+let summary_json = arena.growth_summary_json();
+```
+
+`GrowthSummary` and `ContainerGrowthSummary` derive every number from observed `GrowthEvent` data: total growth events, containers with growth, largest capacity delta, first and last growth events, per-container first and final capacities, and operation-index bounds. JSON remains machine-readable through `arena.report_json()` for full reports and `arena.growth_summary_json()` for compact summary data.
+
+This solves the console flood problem found in real policy-comparison workloads: `Exact` can preserve 50,000 raw events for analysis while the default human report stays compact, and `report_verbose()` remains available for full evidence.

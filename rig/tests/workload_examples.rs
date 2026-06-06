@@ -38,7 +38,8 @@ fn workload_ecs_simulation_stdout_proves_real_tracked_entities() {
     assert!(stdout.contains("entities"));
     assert!(stdout.contains("positions"));
     assert!(stdout.contains("velocities"));
-    assert!(stdout.contains("Growth history:"));
+    assert!(stdout.contains("Growth history summary:"));
+    assert!(stdout.contains("Growth history preview:"));
     assert!(stdout.contains("RIG allocation diff"));
     assert!(stdout.contains("\"growth_history\""));
     assert!(stdout.contains("ECS frames simulated: 60"));
@@ -61,7 +62,8 @@ fn workload_log_ingestion_stdout_proves_real_tracked_lines() {
     assert!(stdout.contains("parsed_lines"));
     assert!(stdout.contains("error_lines"));
     assert!(stdout.contains("warning_lines"));
-    assert!(stdout.contains("Growth history:"));
+    assert!(stdout.contains("Growth history summary:"));
+    assert!(stdout.contains("Growth history preview:"));
     assert!(stdout.contains("RIG allocation diff"));
     assert!(stdout.contains("\"growth_history\""));
 
@@ -83,7 +85,8 @@ fn workload_pathfinding_stdout_proves_real_reconstructed_path() {
     assert!(stdout.contains("visited"));
     assert!(stdout.contains("came_from"));
     assert!(stdout.contains("path"));
-    assert!(stdout.contains("Growth history:"));
+    assert!(stdout.contains("Growth history summary:"));
+    assert!(stdout.contains("Growth history preview:"));
     assert!(stdout.contains("RIG allocation diff"));
     assert!(stdout.contains("\"growth_history\""));
     assert!(stdout.contains("Path found: true"));
