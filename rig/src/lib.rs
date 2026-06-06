@@ -5,17 +5,19 @@ use std::rc::Rc;
 struct ContainerRecord {
     name: String,
     len: usize,
+    initial_capacity: usize,
     capacity: usize,
     growth_events: usize,
     total_pushed: usize,
 }
 
 impl ContainerRecord {
-    fn new(name: impl Into<String>) -> Self {
+    fn new(name: impl Into<String>, initial_capacity: usize) -> Self {
         Self {
             name: name.into(),
             len: 0,
-            capacity: 0,
+            initial_capacity,
+            capacity: initial_capacity,
             growth_events: 0,
             total_pushed: 0,
         }
@@ -50,9 +52,11 @@ impl Arena {
         self.inner.borrow().name.clone()
     }
 
-    fn add_record(&mut self, container_name: impl Into<String>) -> usize {
+    fn add_record(&mut self, container_name: impl Into<String>, initial_capacity: usize) -> usize {
         let mut inner = self.inner.borrow_mut();
-        inner.records.push(ContainerRecord::new(container_name));
+        inner
+            .records
+            .push(ContainerRecord::new(container_name, initial_capacity));
         inner.records.len() - 1
     }
 
@@ -89,9 +93,10 @@ impl Arena {
 
         for record in &inner.records {
             report.push_str(&format!(
-                "\n- Container: {}\n  len: {}\n  capacity: {}\n  growth events: {}\n  total pushed items: {}",
+                "\n- Container: {}\n  fields:\n    len: {}\n    initial capacity: {}\n    current capacity: {}\n    growth events: {}\n    total pushed items: {}",
                 record.name,
                 record.len,
+                record.initial_capacity,
                 record.capacity,
                 record.growth_events,
                 record.total_pushed
@@ -115,9 +120,18 @@ pub struct RigVec<T> {
 impl<T> RigVec<T> {
     /// Create a tracked vector record inside an arena.
     pub fn new(arena: &mut Arena, container_name: impl Into<String>) -> Self {
-        let record_id = arena.add_record(container_name);
+        Self::with_capacity(arena, container_name, 0)
+    }
+
+    /// Create a tracked vector record inside an arena with preallocated capacity.
+    pub fn with_capacity(
+        arena: &mut Arena,
+        container_name: impl Into<String>,
+        capacity: usize,
+    ) -> Self {
+        let record_id = arena.add_record(container_name, capacity);
         let vec = Self {
-            values: Vec::new(),
+            values: Vec::with_capacity(capacity),
             arena: arena.clone(),
             record_id,
             growth_events: 0,
