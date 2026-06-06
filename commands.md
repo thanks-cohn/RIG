@@ -61,6 +61,11 @@ cargo test
 ```
 
 ```bash
+# Run growth-history-related tests by name fragment.
+cargo test growth
+```
+
+```bash
 # Run rustdoc examples as tests.
 cargo test --doc
 ```
@@ -163,7 +168,7 @@ cargo test -- --nocapture
 ```
 
 ```bash
-# One-shot full validation for RIG v0.6.0 evidence comparison from the repository root.
+# One-shot full validation for RIG v0.7.0 evidence comparison from the repository root.
 cargo fmt --manifest-path rig/Cargo.toml --check && \
 cargo test --manifest-path rig/Cargo.toml && \
 cargo test --manifest-path rig/Cargo.toml --doc && \

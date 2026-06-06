@@ -984,3 +984,198 @@ fn human_diff_readable() {
     assert!(report.contains("    growth events: +1"));
     assert!(report.contains("    operations: +4"));
 }
+
+#[test]
+fn growth_rigvec_records_growth_history_from_actual_capacity_changes() {
+    let mut arena = Arena::new("growth-vec-history");
+    let mut users = RigVec::new(&mut arena, "users");
+
+    let old_capacity = users.capacity();
+    users.push(1);
+    let new_capacity = users.capacity();
+    let snapshot = arena.snapshot();
+
+    assert!(new_capacity > old_capacity);
+    assert_eq!(snapshot.growth_history.len(), 1);
+    assert_eq!(snapshot.growth_history[0].container_name, "users");
+    assert_eq!(snapshot.growth_history[0].container_kind, "RigVec");
+    assert_eq!(snapshot.growth_history[0].old_capacity, old_capacity);
+    assert_eq!(snapshot.growth_history[0].new_capacity, new_capacity);
+    assert_eq!(snapshot.growth_history[0].operation_index, 1);
+}
+
+#[test]
+fn growth_rigstring_records_growth_history_from_actual_capacity_changes() {
+    let mut arena = Arena::new("growth-string-history");
+    let mut audit = RigString::new(&mut arena, "audit_events");
+
+    let old_capacity = audit.capacity();
+    audit.push_str("first event");
+    let new_capacity = audit.capacity();
+    let snapshot = arena.snapshot();
+
+    assert!(new_capacity > old_capacity);
+    assert_eq!(snapshot.growth_history.len(), 1);
+    assert_eq!(snapshot.growth_history[0].container_name, "audit_events");
+    assert_eq!(snapshot.growth_history[0].container_kind, "RigString");
+    assert_eq!(snapshot.growth_history[0].old_capacity, old_capacity);
+    assert_eq!(snapshot.growth_history[0].new_capacity, new_capacity);
+    assert_eq!(snapshot.growth_history[0].operation_index, 1);
+}
+
+#[test]
+fn growth_rigvec_operation_index_is_push_count_after_growth_operation() {
+    let mut arena = Arena::new("growth-vec-index");
+    let mut users = RigVec::with_capacity(&mut arena, "users", 2);
+
+    users.push(1);
+    users.push(2);
+    let old_capacity = users.capacity();
+    users.push(3);
+    let new_capacity = users.capacity();
+    let event = arena
+        .snapshot()
+        .growth_history
+        .into_iter()
+        .find(|event| event.container_name == "users")
+        .expect("users growth event");
+
+    assert!(new_capacity > old_capacity);
+    assert_eq!(event.old_capacity, old_capacity);
+    assert_eq!(event.new_capacity, new_capacity);
+    assert_eq!(event.operation_index, 3);
+}
+
+#[test]
+fn growth_rigstring_operation_index_is_append_count_after_growth_operation() {
+    let mut arena = Arena::new("growth-string-index");
+    let mut audit = RigString::with_capacity(&mut arena, "audit_events", 4);
+
+    audit.push_str("1234");
+    let old_capacity = audit.capacity();
+    audit.push_str("5");
+    let new_capacity = audit.capacity();
+    let event = arena
+        .snapshot()
+        .growth_history
+        .into_iter()
+        .find(|event| event.container_name == "audit_events")
+        .expect("audit_events growth event");
+
+    assert!(new_capacity > old_capacity);
+    assert_eq!(event.old_capacity, old_capacity);
+    assert_eq!(event.new_capacity, new_capacity);
+    assert_eq!(event.operation_index, 2);
+}
+
+#[test]
+fn growth_history_appears_in_snapshot() {
+    let mut arena = Arena::new("growth-snapshot");
+    let mut users = RigVec::new(&mut arena, "users");
+
+    users.push(1);
+    let snapshot = arena.snapshot();
+
+    assert_eq!(snapshot.growth_history.len(), users.growth_events());
+    assert_eq!(snapshot.growth_history[0].container_name, "users");
+}
+
+#[test]
+fn growth_history_appears_in_human_report() {
+    let mut arena = Arena::new("growth-human");
+    let mut users = RigVec::new(&mut arena, "users");
+
+    let old_capacity = users.capacity();
+    users.push(1);
+    let new_capacity = users.capacity();
+    let report = arena.report();
+
+    assert!(report.contains("Growth history:"));
+    assert!(report.contains(&format!(
+        "  users: {old_capacity} -> {new_capacity} at operation 1"
+    )));
+}
+
+#[test]
+fn growth_history_human_report_says_none_without_growth_events() {
+    let mut arena = Arena::new("growth-human-none");
+    let _users: RigVec<i32> = RigVec::with_capacity(&mut arena, "users", 4);
+
+    let report = arena.report();
+
+    assert!(report.contains("Growth history:\n  (none)"));
+}
+
+#[test]
+fn growth_history_appears_in_json_report() {
+    let mut arena = Arena::new("growth-json");
+    let mut users = RigVec::new(&mut arena, "users");
+
+    users.push(1);
+    let json = arena.report_json();
+    let value: serde_json::Value = serde_json::from_str(&json).expect("valid JSON value");
+
+    assert_eq!(value["growth_history"][0]["container_name"], "users");
+    assert_eq!(value["growth_history"][0]["container_kind"], "RigVec");
+    assert_eq!(value["growth_history"][0]["operation_index"], 1);
+}
+
+#[test]
+fn growth_history_json_report_round_trips_intact() {
+    let path = temp_report_path("growth-json-round-trip");
+    let _ = fs::remove_file(&path);
+    let mut arena = Arena::new("growth-json-round-trip");
+    let mut users = RigVec::new(&mut arena, "users");
+
+    users.push(1);
+    let snapshot = arena.snapshot();
+    arena.write_json(&path).expect("write report JSON");
+    let loaded = Arena::load_report(&path).expect("load report JSON");
+    let decoded: rig::ArenaReport =
+        serde_json::from_str(&arena.report_json()).expect("ArenaReport JSON");
+
+    assert_eq!(decoded.growth_history, snapshot.growth_history);
+    assert_eq!(loaded.growth_history, snapshot.growth_history);
+    assert_eq!(loaded, snapshot);
+
+    let _ = fs::remove_file(&path);
+}
+
+#[test]
+fn growth_diff_includes_growth_events_added_after_first_snapshot() {
+    let mut arena = Arena::new("growth-diff-added");
+    let mut users = RigVec::with_capacity(&mut arena, "users", 1);
+
+    users.push(1);
+    let before = arena.snapshot();
+    let old_capacity = users.capacity();
+    users.push(2);
+    let new_capacity = users.capacity();
+    let after = arena.snapshot();
+    let diff = before.diff(&after);
+
+    assert!(new_capacity > old_capacity);
+    assert!(before.growth_history.is_empty());
+    assert_eq!(after.growth_history.len(), 1);
+    assert_eq!(diff.growth_events_added, after.growth_history);
+    assert_eq!(diff.growth_events_added[0].old_capacity, old_capacity);
+    assert_eq!(diff.growth_events_added[0].new_capacity, new_capacity);
+    assert_eq!(diff.growth_events_added[0].operation_index, 2);
+}
+
+#[test]
+fn growth_no_growth_event_is_recorded_within_capacity() {
+    let mut arena = Arena::new("growth-within-capacity");
+    let mut users = RigVec::with_capacity(&mut arena, "users", 2);
+    let mut audit = RigString::with_capacity(&mut arena, "audit_events", 8);
+
+    users.push(1);
+    users.push(2);
+    audit.push_str("1234");
+    audit.push_str("5678");
+    let snapshot = arena.snapshot();
+
+    assert_eq!(users.growth_events(), 0);
+    assert_eq!(audit.growth_events(), 0);
+    assert!(snapshot.growth_history.is_empty());
+}

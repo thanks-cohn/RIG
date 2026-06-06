@@ -132,6 +132,21 @@ impl ContainerKind {
     }
 }
 
+/// One observed live capacity-growth event for a tracked container.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GrowthEvent {
+    /// Human-readable container name supplied by the caller.
+    pub container_name: String,
+    /// RIG container wrapper kind, such as `RigVec` or `RigString`.
+    pub container_kind: String,
+    /// Capacity observed immediately before the operation.
+    pub old_capacity: usize,
+    /// Capacity observed immediately after the operation.
+    pub new_capacity: usize,
+    /// Operation count after the operation that caused growth.
+    pub operation_index: usize,
+}
+
 /// Machine-readable totals for all containers tracked by an [`Arena`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ArenaTotals {
@@ -181,6 +196,8 @@ pub struct ArenaReport {
     pub totals: ArenaTotals,
     /// Per-container allocation and operation evidence.
     pub containers: Vec<ContainerReport>,
+    /// Observed live capacity-growth events for tracked containers.
+    pub growth_history: Vec<GrowthEvent>,
 }
 
 /// Machine-readable change evidence between two reports for one shared container.
@@ -237,6 +254,8 @@ pub struct ArenaDiff {
     pub total_growth_event_delta: i64,
     /// Signed aggregate operation change from earlier to later report.
     pub total_operation_delta: i64,
+    /// Growth events present in the later report but not in the earlier report.
+    pub growth_events_added: Vec<GrowthEvent>,
     /// Deltas for every container present in both reports.
     pub containers_changed: Vec<ContainerDiff>,
 }
@@ -313,6 +332,12 @@ impl ArenaReport {
                     .map(|after| ContainerDiff::between(before, after))
             })
             .collect();
+        let growth_events_added = after
+            .growth_history
+            .iter()
+            .filter(|event| !self.growth_history.contains(event))
+            .cloned()
+            .collect();
 
         ArenaDiff {
             before_arena_name: self.arena_name.clone(),
@@ -332,6 +357,7 @@ impl ArenaReport {
                 self.totals.total_pushed_appended_operations,
                 after.totals.total_pushed_appended_operations,
             ),
+            growth_events_added,
             containers_changed,
         }
     }
@@ -422,6 +448,22 @@ impl fmt::Display for ArenaDiff {
         } else {
             for container in &self.containers_removed {
                 writeln!(formatter, "  {} ({})", container.name, container.kind)?;
+            }
+        }
+
+        writeln!(formatter, "Growth events added:")?;
+        if self.growth_events_added.is_empty() {
+            writeln!(formatter, "  (none)")?;
+        } else {
+            for event in &self.growth_events_added {
+                writeln!(
+                    formatter,
+                    "  {}: {} -> {} at operation {}",
+                    event.container_name,
+                    event.old_capacity,
+                    event.new_capacity,
+                    event.operation_index
+                )?;
             }
         }
 
@@ -524,6 +566,7 @@ struct ContainerRecord {
     total_operations: usize,
     extra_metric_label: Option<&'static str>,
     extra_metric_value: usize,
+    growth_history: Vec<GrowthEvent>,
 }
 
 impl ContainerRecord {
@@ -544,6 +587,7 @@ impl ContainerRecord {
             total_operations: 0,
             extra_metric_label,
             extra_metric_value: 0,
+            growth_history: Vec::new(),
         }
     }
 }
@@ -587,6 +631,25 @@ impl Arena {
             .records
             .push(ContainerRecord::new(container_name, kind, initial_capacity));
         inner.records.len() - 1
+    }
+
+    fn record_growth_event(
+        &self,
+        record_id: usize,
+        old_capacity: usize,
+        new_capacity: usize,
+        operation_index: usize,
+    ) {
+        let mut inner = self.inner.borrow_mut();
+        if let Some(record) = inner.records.get_mut(record_id) {
+            record.growth_history.push(GrowthEvent {
+                container_name: record.name.clone(),
+                container_kind: record.kind.as_str().to_owned(),
+                old_capacity,
+                new_capacity,
+                operation_index,
+            });
+        }
     }
 
     fn update_record(
@@ -642,12 +705,18 @@ impl Arena {
                 extra_metric_value: record.extra_metric_label.map(|_| record.extra_metric_value),
             })
             .collect();
+        let growth_history = inner
+            .records
+            .iter()
+            .flat_map(|record| record.growth_history.iter().cloned())
+            .collect();
 
         ArenaReport {
             arena_name: inner.name.clone(),
             tracked_container_count: inner.records.len(),
             totals,
             containers,
+            growth_history,
         }
     }
 
@@ -690,7 +759,6 @@ impl Arena {
 
         if snapshot.containers.is_empty() {
             report.push_str("\n  (none)");
-            return report;
         }
 
         for record in &snapshot.containers {
@@ -710,6 +778,21 @@ impl Arena {
                 (&record.extra_metric_label, record.extra_metric_value)
             {
                 report.push_str(&format!("\n    {}: {}", label, value));
+            }
+        }
+
+        report.push_str("\nGrowth history:");
+        if snapshot.growth_history.is_empty() {
+            report.push_str("\n  (none)");
+        } else {
+            for event in &snapshot.growth_history {
+                report.push_str(&format!(
+                    "\n  {}: {} -> {} at operation {}",
+                    event.container_name,
+                    event.old_capacity,
+                    event.new_capacity,
+                    event.operation_index
+                ));
             }
         }
 
@@ -757,8 +840,15 @@ impl<T> RigVec<T> {
         self.values.push(value);
         self.total_pushed += 1;
 
-        if self.values.capacity() > old_capacity {
+        let new_capacity = self.values.capacity();
+        if new_capacity > old_capacity {
             self.growth_events += 1;
+            self.arena.record_growth_event(
+                self.record_id,
+                old_capacity,
+                new_capacity,
+                self.total_pushed,
+            );
         }
 
         self.sync_record();
@@ -844,8 +934,15 @@ impl RigString {
         self.append_operations += 1;
         self.total_appended_bytes += value.len();
 
-        if self.value.capacity() > old_capacity {
+        let new_capacity = self.value.capacity();
+        if new_capacity > old_capacity {
             self.growth_events += 1;
+            self.arena.record_growth_event(
+                self.record_id,
+                old_capacity,
+                new_capacity,
+                self.append_operations,
+            );
         }
 
         self.sync_record();

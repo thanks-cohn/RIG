@@ -4,9 +4,9 @@ RIG is a Rust crate that brings Zig-style allocator visibility to everyday Rust 
 
 Rust keeps doing the safety work: ownership, borrowing, lifetimes, and type checking are still handled by normal Rust. RIG does not replace the compiler, invent a programming language, or implement custom allocator internals. It makes allocation and growth behavior visible at the container level so developers can see what grows over time.
 
-## What v0.6.0 proves
+## What v0.7.0 proves
 
-RIG v0.6.0 is intentionally small and real:
+RIG v0.7.0 is intentionally small and real:
 
 - `Arena` gives a human-readable name to a tracking scope.
 - `RigVec<T>` wraps a real `Vec<T>`.
@@ -85,7 +85,7 @@ Small JSON example:
 
 ## Evidence comparison
 
-RIG v0.6.0 explains change between two reports without adding a CLI, macros, async work, background services, automatic persistence, or hidden files.
+RIG v0.7.0 explains change between two reports without adding a CLI, macros, async work, background services, automatic persistence, or hidden files.
 
 ```rust
 let before = arena.snapshot();
@@ -111,6 +111,13 @@ Changed containers:
     operations: +4
 ```
 
+
+## Growth history
+
+RIG records real observed capacity growth events while tracked containers are mutated. A `GrowthEvent` captures the container name, container kind, old capacity, new capacity, and operation index after the push or append that caused the capacity change.
+
+Growth history is not inferred later and fake events are not generated. It is observed live when `RigVec::push` or `RigString::push_str` sees capacity increase. Like snapshots, reports, JSON rendering, and diffs, this stays in memory unless the caller explicitly invokes `write_json` with a path.
+
 ## Optional evidence persistence
 
 RIG does not write files automatically. Default RIG behavior remains fully in-memory: `Arena::new()`, `RigVec` and `RigString` operations, `arena.report()`, `arena.snapshot()`, and `arena.report_json()` do not create files, logs, `.rig/`, or background output.
@@ -128,7 +135,7 @@ assert_eq!(loaded, arena.snapshot());
 
 ## Path to v1
 
-RIG v0.6.0 is public API hardening for the path to a real v1. It does not add a CLI, macros, async work, background services, automatic persistence, or hidden project files. The point of this release is to make the API shape intentional, documented, and resistant to misuse.
+RIG v0.7.0 is public API hardening for the path to a real v1. It does not add a CLI, macros, async work, background services, automatic persistence, or hidden project files. The point of this release is to make the API shape intentional, documented, and resistant to misuse.
 
 A real v1 requires stable public API shape, useful rustdoc for exported types and methods, compiling doc tests for normal workflows, and abuse tests that prove RIG stays explicit under pressure. RIG still avoids hidden behavior: reports, snapshots, JSON rendering, and diffs remain in memory unless the programmer explicitly chooses a `write_json` path.
 
@@ -140,7 +147,7 @@ A real v1 requires stable public API shape, useful rustdoc for exported types an
 cargo run --example demo
 ```
 
-The v0.6.0 demo creates report A, mutates tracked containers, creates report B, prints the readable report, prints the JSON report, prints the human diff, prints the JSON diff, explicitly writes the report to a temp file, loads it back, and verifies the loaded report equals the live snapshot.
+The v0.7.0 demo creates report A, mutates tracked containers, creates report B, prints the readable report, prints the JSON report, prints the human diff, prints the JSON diff, explicitly writes the report to a temp file, loads it back, and verifies the loaded report equals the live snapshot.
 
 ```text
 Rust is still safe, but allocation and growth behavior is now visible.
@@ -201,9 +208,9 @@ RIG is not:
 - a macro system
 - custom allocator internals
 
-## Smoke tests that matter in v0.6.0
+## Smoke tests that matter in v0.7.0
 
-The v0.6.0 smoke tests prove real capability:
+The v0.7.0 smoke tests prove real capability:
 
 - arenas can be named and reported
 - tracked vectors and strings start empty and remain usable as normal Rust containers

@@ -150,7 +150,7 @@ Lifetime strategy: arena-owned
 
 ## Machine-readable reports and diffs
 
-RIG v0.6.0 has real machine-readable reports, evidence comparison, and optional evidence persistence through the Rust ecosystem rather than homemade serialization.
+RIG v0.7.0 has real machine-readable reports, evidence comparison, and optional evidence persistence through the Rust ecosystem rather than homemade serialization.
 
 ```rust
 let snapshot = arena.snapshot();
@@ -196,7 +196,7 @@ Small JSON output example:
 
 ## Evidence comparison
 
-RIG v0.6.0 can explain change between two snapshots. Take report A, mutate tracked containers, take report B, and diff them.
+RIG v0.7.0 can explain change between two snapshots. Take report A, mutate tracked containers, take report B, and diff them.
 
 ```rust
 let before = arena.snapshot();
@@ -224,6 +224,13 @@ Changed containers:
 
 ---
 
+
+## Growth history
+
+RIG records real observed capacity growth events while tracked containers are mutated. A `GrowthEvent` captures the container name, container kind, old capacity, new capacity, and operation index after the push or append that caused the capacity change.
+
+Growth history is not inferred later and fake events are not generated. It is observed live when `RigVec::push` or `RigString::push_str` sees capacity increase. Like snapshots, reports, JSON rendering, and diffs, this stays in memory unless the caller explicitly invokes `write_json` with a path.
+
 ## Optional evidence persistence
 
 RIG does not write files automatically. Persistence is 100% opt-in: default reports stay in memory, and RIG does not create `.rig/`, logs, mystery directories, or background files.
@@ -234,7 +241,7 @@ RIG does not write files automatically. Persistence is 100% opt-in: default repo
 
 ## Path to v1
 
-RIG v0.6.0 is public API hardening for the path to a real v1. It does not add a CLI, macros, async work, background services, automatic persistence, or hidden project files. The point of this release is to make the API shape intentional, documented, and resistant to misuse.
+RIG v0.7.0 is public API hardening for the path to a real v1. It does not add a CLI, macros, async work, background services, automatic persistence, or hidden project files. The point of this release is to make the API shape intentional, documented, and resistant to misuse.
 
 A real v1 requires stable public API shape, useful rustdoc for exported types and methods, compiling doc tests for normal workflows, and abuse tests that prove RIG stays explicit under pressure. RIG still avoids hidden behavior: reports, snapshots, JSON rendering, and diffs remain in memory unless the programmer explicitly chooses a `write_json` path.
 
