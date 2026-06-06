@@ -150,7 +150,7 @@ Lifetime strategy: arena-owned
 
 ## Machine-readable reports
 
-RIG v0.3.0 adds real machine-readable reports through the Rust ecosystem rather than homemade serialization.
+RIG v0.4.0 has real machine-readable reports and optional evidence persistence through the Rust ecosystem rather than homemade serialization.
 
 ```rust
 let snapshot = arena.snapshot();
@@ -187,6 +187,14 @@ Small JSON output example:
   ]
 }
 ```
+
+---
+
+## Optional evidence persistence
+
+RIG does not write files automatically. Persistence is 100% opt-in: default reports stay in memory, and RIG does not create `.rig/`, logs, mystery directories, or background files.
+
+`Arena::write_json(path)` writes the current pretty JSON report only when the programmer explicitly calls it. `Arena::load_report(path)` loads a persisted report back into an `ArenaReport`, so allocation/growth evidence can survive the process for later inspection.
 
 ---
 

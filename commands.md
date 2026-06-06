@@ -125,3 +125,18 @@ cargo tree --manifest-path rig/Cargo.toml
 # Remove Cargo build artifacts when a clean rebuild is needed.
 cargo clean
 ```
+
+```bash
+# Runs the demo, including explicit opt-in JSON report writing and loading.
+cargo run --example demo
+```
+
+```bash
+# Optional: inspect temporary RIG demo/test report files if any remain.
+find /tmp -maxdepth 1 -name "rig-*.json" 2>/dev/null
+```
+
+```bash
+# Useful when checking persistence tests and demo-like printed paths.
+cargo test -- --nocapture
+```
