@@ -81,11 +81,11 @@ RIG is a development philosophy expressed through a Rust library.
 The philosophy is:
 
 ```text
-Visibility over mystery.
+Visibility oveR mysteRy.
 
-Explicitness over assumption.
+ExplIcitness over assumptIon.
 
-Understanding over guessing.
+UnderstandinG over guessinG.
 ```
 
 ---
