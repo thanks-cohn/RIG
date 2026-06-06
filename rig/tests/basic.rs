@@ -1,4 +1,4 @@
-use rig::{Arena, RigVec};
+use rig::{Arena, RigString, RigVec};
 
 #[test]
 fn arena_creation_tracks_name() {
@@ -19,8 +19,9 @@ fn rigvec_creation_starts_empty_and_is_reported() {
     let report = arena.report();
     assert!(report.contains("Arena: main"));
     assert!(report.contains("Container: users"));
+    assert!(report.contains("kind: RigVec"));
     assert!(report.contains("len: 0"));
-    assert!(report.contains("capacity: 0"));
+    assert!(report.contains("current capacity: 0"));
     assert!(report.contains("growth events: 0"));
     assert!(report.contains("total pushed items: 0"));
 }
@@ -83,8 +84,9 @@ fn empty_vector_report_is_valid() {
     let report = arena.report();
     assert!(report.contains("Arena: empty-check"));
     assert!(report.contains("Container: empty-buffer"));
+    assert!(report.contains("kind: RigVec"));
     assert!(report.contains("len: 0"));
-    assert!(report.contains("capacity: 0"));
+    assert!(report.contains("current capacity: 0"));
     assert!(report.contains("growth events: 0"));
     assert!(report.contains("total pushed items: 0"));
 }
@@ -101,8 +103,9 @@ fn report_contains_required_tracking_fields_after_growth() {
     let report = arena.report();
     assert!(report.contains("Arena: batch"));
     assert!(report.contains("Container: jobs"));
+    assert!(report.contains("kind: RigVec"));
     assert!(report.contains("len: 32"));
-    assert!(report.contains("capacity:"));
+    assert!(report.contains("current capacity:"));
     assert!(report.contains("growth events:"));
     assert!(report.contains("total pushed items: 32"));
     assert!(jobs.growth_events() > 0);
@@ -120,6 +123,7 @@ fn with_capacity_records_capacity_and_reports_each_growth_phase() {
     let initial_report = arena.report();
     assert!(initial_report.contains("Arena: capacity-check"));
     assert!(initial_report.contains("Container: items"));
+    assert!(initial_report.contains("  kind: RigVec"));
     assert!(initial_report.contains("    len: 0"));
     assert!(initial_report.contains("    initial capacity: 2"));
     assert!(initial_report.contains("    current capacity: 2"));
@@ -157,12 +161,145 @@ fn with_capacity_records_capacity_and_reports_each_growth_phase() {
 }
 
 #[test]
+fn rigstring_starts_empty_and_is_reported() {
+    let mut arena = Arena::new("strings");
+    let audit = RigString::new(&mut arena, "audit_events");
+
+    assert!(audit.is_empty());
+    assert_eq!(audit.len(), 0);
+    assert_eq!(audit.capacity(), 0);
+    assert_eq!(audit.growth_events(), 0);
+    assert_eq!(audit.append_operations(), 0);
+    assert_eq!(audit.total_appended_bytes(), 0);
+
+    let report = arena.report();
+    assert!(report.contains("Container: audit_events"));
+    assert!(report.contains("kind: RigString"));
+    assert!(report.contains("total append operations: 0"));
+    assert!(report.contains("total appended bytes: 0"));
+}
+
+#[test]
+fn rigstring_push_str_changes_len_and_appended_bytes() {
+    let mut arena = Arena::new("strings");
+    let mut audit = RigString::new(&mut arena, "audit_events");
+
+    audit.push_str("log");
+    audit.push_str("in");
+
+    assert_eq!(audit.len(), 5);
+    assert_eq!(audit.append_operations(), 2);
+    assert_eq!(audit.total_appended_bytes(), 5);
+
+    let report = arena.report();
+    assert!(report.contains("    len: 5"));
+    assert!(report.contains("    total append operations: 2"));
+    assert!(report.contains("    total appended bytes: 5"));
+}
+
+#[test]
+fn rigstring_growth_events_occur_when_capacity_grows() {
+    let mut arena = Arena::new("strings");
+    let mut audit = RigString::new(&mut arena, "audit_events");
+
+    let starting_capacity = audit.capacity();
+    audit.push_str("first event");
+
+    assert!(audit.capacity() > starting_capacity);
+    assert_eq!(audit.growth_events(), 1);
+
+    let report = arena.report();
+    assert!(report.contains("kind: RigString"));
+    assert!(report.contains("    growth events: 1"));
+}
+
+#[test]
+fn rigstring_with_capacity_records_initial_capacity() {
+    let mut arena = Arena::new("strings");
+    let audit = RigString::with_capacity(&mut arena, "audit_events", 16);
+
+    assert_eq!(audit.len(), 0);
+    assert_eq!(audit.capacity(), 16);
+    assert_eq!(audit.growth_events(), 0);
+
+    let report = arena.report();
+    assert!(report.contains("    initial capacity: 16"));
+    assert!(report.contains("    current capacity: 16"));
+}
+
+#[test]
+fn pushing_and_appending_within_capacity_do_not_count_as_growth() {
+    let mut arena = Arena::new("capacity-check");
+    let mut items = RigVec::with_capacity(&mut arena, "items", 2);
+    let mut audit = RigString::with_capacity(&mut arena, "audit_events", 8);
+
+    items.push("first");
+    items.push("second");
+    audit.push_str("1234");
+    audit.push_str("5678");
+
+    assert_eq!(items.growth_events(), 0);
+    assert_eq!(audit.growth_events(), 0);
+
+    let report = arena.report();
+    assert!(report.contains("  total growth events: 0"));
+}
+
+#[test]
+fn exceeding_capacity_counts_as_growth_for_vec_and_string() {
+    let mut arena = Arena::new("capacity-check");
+    let mut items = RigVec::with_capacity(&mut arena, "items", 1);
+    let mut audit = RigString::with_capacity(&mut arena, "audit_events", 4);
+
+    items.push("first");
+    audit.push_str("1234");
+
+    assert_eq!(items.growth_events(), 0);
+    assert_eq!(audit.growth_events(), 0);
+
+    items.push("second");
+    audit.push_str("5");
+
+    assert_eq!(items.growth_events(), 1);
+    assert_eq!(audit.growth_events(), 1);
+
+    let report = arena.report();
+    assert!(report.contains("  total growth events: 2"));
+}
+
+#[test]
+fn arena_totals_update_across_multiple_containers() {
+    let mut arena = Arena::new("request");
+    let mut users = RigVec::with_capacity(&mut arena, "users", 4);
+    let mut audit = RigString::with_capacity(&mut arena, "audit_events", 16);
+
+    users.push(1);
+    users.push(2);
+    audit.push_str("login");
+    audit.push_str(" ok");
+
+    let report = arena.report();
+    assert!(report.contains("Tracked containers: 2"));
+    assert!(report.contains("Totals:\n  total len: 10"));
+    assert!(report.contains("  total current capacity: 20"));
+    assert!(report.contains("  total growth events: 0"));
+    assert!(report.contains("  total pushed/appended operations: 4"));
+}
+
+#[test]
 fn report_formats_nested_fields_with_clean_indentation() {
     let mut arena = Arena::new("format-check");
     let _items: RigVec<i32> = RigVec::with_capacity(&mut arena, "items", 4);
+    let _audit = RigString::with_capacity(&mut arena, "audit_events", 8);
 
     let report = arena.report();
     assert!(report.contains(
-        "- Container: items\n  fields:\n    len: 0\n    initial capacity: 4\n    current capacity: 4\n    growth events: 0\n    total pushed items: 0"
+        "Totals:\n  total len: 0\n  total current capacity: 12\n  total growth events: 0\n  total pushed/appended operations: 0\nContainers:"
+    ));
+    assert!(report.contains(
+        "- Container: items\n  kind: RigVec\n  fields:\n    len: 0\n    initial capacity: 4\n    current capacity: 4\n    growth events: 0\n    total pushed items: 0"
+    ));
+    assert!(report.contains(
+        "- Container: audit_events\n  kind: RigString\n  fields:\n    len: 0\n    initial capacity: 8\n    current capacity: 8\n    growth events: 0\n    total append operations: 0\n    total appended bytes: 0"
     ));
 }
