@@ -344,7 +344,7 @@ fn report_formats_nested_fields_with_clean_indentation() {
     let _audit = RigString::with_capacity(&mut arena, "audit_events", 8);
 
     let report = arena.report();
-    let expected = "RIG allocation report\nArena: format-check\nTracked containers: 2\nTotals:\n  total len: 0\n  total current capacity: 12\n  total growth events: 0\n  total pushed/appended operations: 0\nContainers:\n  Container: items\n  kind: RigVec\n  fields:\n    len: 0\n    initial capacity: 4\n    current capacity: 4\n    growth events: 0\n    total pushed items: 0\n  Container: audit_events\n  kind: RigString\n  fields:\n    len: 0\n    initial capacity: 8\n    current capacity: 8\n    growth events: 0\n    total append operations: 0\n    total appended bytes: 0\nGrowth history:\n  (none)";
+    let expected = "RIG allocation report\nArena: format-check\nTracked containers: 2\nTotals:\n  total len: 0\n  total current capacity: 12\n  total growth events: 0\n  total pushed/appended operations: 0\nContainers:\n  Container: items\n  kind: RigVec\n  fields:\n    len: 0\n    initial capacity: 4\n    growth policy: RustDefault\n    current capacity: 4\n    growth events: 0\n    total pushed items: 0\n  Container: audit_events\n  kind: RigString\n  fields:\n    len: 0\n    initial capacity: 8\n    growth policy: RustDefault\n    current capacity: 8\n    growth events: 0\n    total append operations: 0\n    total appended bytes: 0\nGrowth history:\n  (none)";
 
     assert_eq!(report, expected);
 }

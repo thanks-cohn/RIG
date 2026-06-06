@@ -71,6 +71,7 @@ Small JSON example:
       "kind": "RigVec",
       "len": 2,
       "initial_capacity": 4,
+      "growth_policy": "RustDefault",
       "current_capacity": 4,
       "growth_events": 0,
       "operation_label": "total pushed items",
@@ -241,3 +242,21 @@ RIG v0.8.0 adds deterministic workload examples that explain real container beha
 - Pathfinding: tracks frontier, visited nodes, parent edges, reconstructed path nodes, and a search log while running deterministic breadth-first search on a grid graph.
 
 Each example prints human reports, JSON reports, diffs, and growth history. These examples are intentionally deterministic, require no external files, and do not create files automatically.
+
+## Allocation policy experiments
+
+RIG v0.9.0 moves the crate from visibility toward control with explicit growth policies for `RigVec` and `RigString`.
+
+`GrowthPolicy` does not replace Rust's allocator. It decides whether a tracked container should reserve before an operation that would exceed capacity. Reports then show the observed consequences: actual current capacity, actual growth event count, and actual growth history recorded after live push/append operations.
+
+The policies are:
+
+- `RustDefault` for normal Rust `Vec`/`String` growth.
+- `Double` to request at least doubled capacity before growth, with zero-capacity containers starting at at least 4.
+- `Exact` to request exactly the needed length for the next operation.
+- `ReserveAhead(n)` to request the needed length plus `n` spare capacity and expose that parameter in report metadata.
+- `Capped { max_capacity }` to refuse growth beyond the cap.
+
+Capped containers are intentionally fallible: `RigVec::try_push` and `RigString::try_push_str` return `RigError::CapacityLimitExceeded` with the container name, requested capacity, and maximum capacity. The existing `push` and `push_str` methods preserve ergonomic use and panic clearly only when a capped policy refuses the operation.
+
+This keeps RIG safe and honest. Policies influence reservation timing, while reports keep using real observed capacities rather than planned or invented numbers. Persistence remains explicit opt-in through `write_json`; no hidden files or automatic persistence are added.
