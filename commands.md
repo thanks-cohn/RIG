@@ -21,28 +21,74 @@ git pull origin main
 ```
 
 ```bash
-# Check Rust formatting without rewriting files.
+# Stage all current file changes for commit.
+git add .
+```
+
+```bash
+# Commit staged changes with a release message.
+git commit -m "release: RIG v0.3.0"
+```
+
+```bash
+# Push the local main branch to origin.
+git push origin main
+```
+
+```bash
+# List known Git tags.
+git tag --list
+```
+
+```bash
+# Show the tagged source state for v0.2.0.
+git show v0.2.0
+```
+
+```bash
+# Create an annotated release tag.
+git tag -a v0.3.0 -m "RIG v0.3.0"
+```
+
+```bash
+# Check Rust formatting without rewriting files from the crate directory.
 cargo fmt --check
 ```
 
 ```bash
-# Run the crate test suite.
+# Run the crate test suite from the crate directory.
 cargo test
 ```
 
 ```bash
-# Run the allocation-visibility demo example.
+# Run tests and show captured stdout/stderr from the crate directory.
+cargo test -- --nocapture
+```
+
+```bash
+# Run the allocation-visibility demo example from the crate directory.
 cargo run --example demo
 ```
 
 ```bash
-# Run Clippy and fail on warnings.
+# Run Clippy from the crate directory and fail on warnings.
 cargo clippy -- -D warnings
 ```
 
 ```bash
-# One-shot validation from the crate directory: format check, tests, demo, and Clippy.
-cd ~/dev/RIG/rig && cargo fmt --check && cargo test && cargo run --example demo && cargo clippy -- -D warnings
+# Show the crate dependency tree.
+# Useful for proving RIG uses real serde and serde_json from crates.io.
+cargo tree
+```
+
+```bash
+# One-shot full validation from the crate directory: format check, tests, demo, Clippy, and dependency tree.
+cd ~/dev/RIG/rig && \
+cargo fmt --check && \
+cargo test && \
+cargo run --example demo && \
+cargo clippy -- -D warnings && \
+cargo tree
 ```
 
 ```bash
@@ -56,6 +102,11 @@ cargo test --manifest-path rig/Cargo.toml
 ```
 
 ```bash
+# From the repository root, run tests with captured output for the rig crate by manifest path.
+cargo test --manifest-path rig/Cargo.toml -- --nocapture
+```
+
+```bash
 # From the repository root, run the demo example for the rig crate by manifest path.
 cargo run --manifest-path rig/Cargo.toml --example demo
 ```
@@ -66,21 +117,11 @@ cargo clippy --manifest-path rig/Cargo.toml -- -D warnings
 ```
 
 ```bash
+# Show the dependency tree from the repository root.
+cargo tree --manifest-path rig/Cargo.toml
+```
+
+```bash
 # Remove Cargo build artifacts when a clean rebuild is needed.
 cargo clean
-```
-
-```bash
-# Stage all current file changes for commit.
-git add .
-```
-
-```bash
-# Commit staged changes with a replacement message.
-git commit -m "message here"
-```
-
-```bash
-# Push the local main branch to origin.
-git push origin main
 ```

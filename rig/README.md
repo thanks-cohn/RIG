@@ -4,9 +4,9 @@ RIG is a Rust crate that brings Zig-style allocator visibility to everyday Rust 
 
 Rust keeps doing the safety work: ownership, borrowing, lifetimes, and type checking are still handled by normal Rust. RIG does not replace the compiler, invent a programming language, or implement custom allocator internals. It makes allocation and growth behavior visible at the container level so developers can see what grows over time.
 
-## What v1 proves
+## What v0.3.0 proves
 
-RIG v1 is intentionally small and real:
+RIG v0.3.0 is intentionally small and real:
 
 - `Arena` gives a human-readable name to a tracking scope.
 - `RigVec<T>` wraps a real `Vec<T>`.
@@ -14,6 +14,8 @@ RIG v1 is intentionally small and real:
 - `push`, `push_str`, `len`, `is_empty`, and `capacity` behave like normal Rust container operations.
 - Capacity growth events, total pushed items, append operations, and appended bytes are tracked.
 - `arena.report()` produces live allocation/growth data from tracked containers.
+- `arena.snapshot()` returns typed machine-readable report data.
+- `arena.report_json()` serializes that snapshot with real `serde_json`.
 
 ## Example
 
@@ -31,13 +33,53 @@ println!("{}", arena.report());
 
 Output includes the arena name, container name, current length, capacity, growth events, and total pushed/appended operations.
 
+## Machine-readable reports
+
+RIG keeps the existing human report and adds structured report data for tools.
+
+```rust
+let snapshot = arena.snapshot();
+let json = arena.report_json();
+```
+
+`arena.snapshot()` returns an `ArenaReport` with the arena name, tracked container count, aggregate totals, and per-container evidence. `arena.report_json()` pretty-prints the same data through `serde_json::to_string_pretty(&self.snapshot())`, using the real crates.io `serde` and `serde_json` crates.
+
+Small JSON example:
+
+```json
+{
+  "arena_name": "request-lifetime arena",
+  "tracked_container_count": 1,
+  "totals": {
+    "total_len": 2,
+    "total_current_capacity": 4,
+    "total_growth_events": 0,
+    "total_pushed_appended_operations": 2
+  },
+  "containers": [
+    {
+      "name": "users",
+      "kind": "RigVec",
+      "len": 2,
+      "initial_capacity": 4,
+      "current_capacity": 4,
+      "growth_events": 0,
+      "operation_label": "total pushed items",
+      "total_operations": 2,
+      "extra_metric_label": null,
+      "extra_metric_value": null
+    }
+  ]
+}
+```
+
 ## Run the demo
 
 ```bash
 cargo run --example demo
 ```
 
-The v1 demo creates tracked vectors and strings, then prints the exact readable report below:
+The v0.3.0 demo creates tracked vectors and strings, then prints the readable report, a blank line, and the JSON report.
 
 ```text
 Rust is still safe, but allocation and growth behavior is now visible.
@@ -98,9 +140,9 @@ RIG is not:
 - a macro system
 - custom allocator internals
 
-## Smoke tests that matter in v1
+## Smoke tests that matter in v0.3.0
 
-The v1 smoke tests prove real capability:
+The v0.3.0 smoke tests prove real capability:
 
 - arenas can be named and reported
 - tracked vectors and strings start empty and remain usable as normal Rust containers
@@ -110,3 +152,6 @@ The v1 smoke tests prove real capability:
 - multiple containers can report through one arena
 - empty container reports still contain valid allocation/growth fields
 - reports preserve exact readable indentation for totals, containers, and fields
+- snapshots contain arena names, tracked container counts, totals, container kinds, capacity, and growth evidence
+- JSON reports parse with real `serde_json` and round-trip into `ArenaReport`
+- the repository does not contain a fake `vendor/` dependency tree

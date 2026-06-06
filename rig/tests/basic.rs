@@ -297,3 +297,138 @@ fn report_formats_nested_fields_with_clean_indentation() {
 
     assert_eq!(report, expected);
 }
+
+#[test]
+fn snapshot_contains_arena_name_and_tracked_container_count() {
+    let mut arena = Arena::new("machine-readable");
+    let mut users = RigVec::with_capacity(&mut arena, "users", 2);
+    let mut audit = RigString::with_capacity(&mut arena, "audit_events", 8);
+
+    users.push(1);
+    audit.push_str("login");
+
+    let snapshot = arena.snapshot();
+
+    assert_eq!(snapshot.arena_name, "machine-readable");
+    assert_eq!(snapshot.tracked_container_count, 2);
+    assert_eq!(snapshot.containers.len(), 2);
+}
+
+#[test]
+fn snapshot_totals_match_human_report_totals() {
+    let mut arena = Arena::new("totals-proof");
+    let mut users = RigVec::with_capacity(&mut arena, "users", 2);
+    let mut audit = RigString::with_capacity(&mut arena, "audit_events", 8);
+
+    users.push(7);
+    users.push(8);
+    audit.push_str("abc");
+    audit.push_str("def");
+
+    let snapshot = arena.snapshot();
+    let report = arena.report();
+
+    assert_eq!(snapshot.totals.total_len, 8);
+    assert!(report.contains(&format!("  total len: {}", snapshot.totals.total_len)));
+    assert!(report.contains(&format!(
+        "  total current capacity: {}",
+        snapshot.totals.total_current_capacity
+    )));
+    assert!(report.contains(&format!(
+        "  total growth events: {}",
+        snapshot.totals.total_growth_events
+    )));
+    assert!(report.contains(&format!(
+        "  total pushed/appended operations: {}",
+        snapshot.totals.total_pushed_appended_operations
+    )));
+}
+
+#[test]
+fn snapshot_includes_vec_and_string_container_kinds() {
+    let mut arena = Arena::new("kind-proof");
+    let _users: RigVec<i32> = RigVec::new(&mut arena, "users");
+    let _audit = RigString::new(&mut arena, "audit_events");
+
+    let snapshot = arena.snapshot();
+    let kinds: Vec<&str> = snapshot
+        .containers
+        .iter()
+        .map(|container| container.kind.as_str())
+        .collect();
+
+    assert!(kinds.contains(&"RigVec"));
+    assert!(kinds.contains(&"RigString"));
+}
+
+#[test]
+fn snapshot_includes_capacity_and_growth_evidence() {
+    let mut arena = Arena::new("growth-proof");
+    let mut users = RigVec::with_capacity(&mut arena, "users", 1);
+    let mut audit = RigString::with_capacity(&mut arena, "audit_events", 1);
+
+    users.push(1);
+    users.push(2);
+    audit.push_str("a");
+    audit.push_str("bc");
+
+    let snapshot = arena.snapshot();
+    let users_report = snapshot
+        .containers
+        .iter()
+        .find(|container| container.name == "users")
+        .expect("users report exists");
+    let audit_report = snapshot
+        .containers
+        .iter()
+        .find(|container| container.name == "audit_events")
+        .expect("audit_events report exists");
+
+    assert_eq!(users_report.initial_capacity, 1);
+    assert_eq!(users_report.current_capacity, users.capacity());
+    assert_eq!(users_report.growth_events, users.growth_events());
+    assert!(users_report.growth_events >= 1);
+    assert_eq!(audit_report.initial_capacity, 1);
+    assert_eq!(audit_report.current_capacity, audit.capacity());
+    assert_eq!(audit_report.growth_events, audit.growth_events());
+    assert!(audit_report.growth_events >= 1);
+}
+
+#[test]
+fn report_json_is_valid_json_and_contains_arena_name() {
+    let mut arena = Arena::new("json-proof");
+    let mut users = RigVec::new(&mut arena, "users");
+
+    users.push(42);
+
+    let json = arena.report_json();
+    let parsed: serde_json::Value = serde_json::from_str(&json).expect("valid JSON report");
+
+    assert_eq!(parsed["arena_name"], "json-proof");
+    assert_eq!(parsed["tracked_container_count"], 1);
+    assert_eq!(parsed["containers"][0]["kind"], "RigVec");
+}
+
+#[test]
+fn report_json_round_trips_back_into_arena_report() {
+    let mut arena = Arena::new("round-trip-proof");
+    let mut audit = RigString::with_capacity(&mut arena, "audit_events", 4);
+
+    audit.push_str("ok");
+
+    let snapshot = arena.snapshot();
+    let json = arena.report_json();
+    let decoded: rig::ArenaReport = serde_json::from_str(&json).expect("ArenaReport JSON");
+
+    assert_eq!(decoded, snapshot);
+}
+
+#[test]
+fn repository_does_not_contain_fake_vendor_directory() {
+    let crate_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let repo_root = crate_dir
+        .parent()
+        .expect("rig crate lives under the repository root");
+
+    assert!(!repo_root.join("vendor").exists());
+}
