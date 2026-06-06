@@ -1,291 +1,199 @@
 # RIG
 
-## The Explainable Systems Language
+## Explicit Allocation for Rust
 
-RIG is an experimental systems programming language focused on a simple idea:
+RIG is a Rust library inspired by Zig's allocation philosophy.
 
-> A program should not merely run.
->
-> A program should explain itself.
+Rust gives us safety.
 
-For fifty years, systems programming has revolved around three competing virtues:
+Zig gives us allocator visibility.
 
-* C gave us power.
-* Rust gave us safety.
-* Zig gave us clarity.
+RIG exists to bring allocator visibility and memory awareness into everyday Rust development.
 
-RIG seeks a fourth virtue:
+The goal is simple:
 
-* Explainability.
+> Memory should not be mysterious.
 
-The goal is not merely to build software that works.
-
-The goal is to build software that can answer:
+When reading code, a developer should be able to quickly answer:
 
 ```text
-What happened?
-When did it happen?
-Where did it happen?
-Why did it happen?
-What changed?
-How do I reproduce it?
+Where did this memory come from?
+
+Who owns it?
+
+How long does it live?
+
+Which allocator created it?
+
+What grows over time?
+
+What is consuming resources?
 ```
+
+---
+
+## Why RIG?
+
+Rust is one of the safest systems programming languages ever created.
+
+However, many allocations can become invisible as projects grow.
+
+A simple:
+
+```rust
+let users = Vec::new();
+```
+
+does not immediately communicate:
+
+* where memory comes from
+* which allocator is responsible
+* what lifetime strategy is intended
+* whether growth is expected
+
+Zig encourages developers to think about allocation explicitly.
+
+RIG brings that mindset into Rust.
 
 ---
 
 ## Philosophy
 
-Modern systems are often powerful but opaque.
 
-When they fail, developers are left asking:
+
+RIG is a development philosophy expressed through a Rust library.
+
+The philosophy is:
 
 ```text
-Everything is correct on paper.
+Visibility over mystery.
 
-Then why did it break?
+Explicitness over assumption.
+
+Understanding over guessing.
 ```
-
-RIG exists to eliminate mystery.
-
-Every build should leave evidence.
-
-Every run should leave evidence.
-
-Every crash should leave evidence.
-
-Every successful result should be reproducible.
-
-The machine should know its own history.
 
 ---
 
 ## Core Principles
 
-### No Hidden Allocation
+### Allocators Matter
 
-Memory should be visible.
+Allocation is one of the most important events in a system.
 
-The programmer should know:
-
-* who allocated it
-* who owns it
-* who frees it
-* how long it lives
+RIG makes allocation visible.
 
 ---
 
-### No Hidden Control Flow
+### Rust First
 
-Execution should be explicit.
+RIG embraces:
 
-No invisible magic.
+* rustc
+* Cargo
+* Rust ownership
+* Rust borrowing
+* Rust safety guarantees
 
-No mysterious behavior.
 
-No surprises.
-
----
-
-### Explainability First
-
-RIG treats explainability as a first-class feature.
-
-The language should answer questions, not merely report errors.
 
 ---
 
-### Reproducibility First
+### Zig-Inspired Design
 
-Successful runs should be replayable.
+RIG takes inspiration from Zig's explicit allocator culture.
 
-Failed runs should be investigable.
+Memory should be visible in code.
 
-A build should be a receipt.
-
-Not a ritual.
+Allocation should feel intentional.
 
 ---
 
-### Machine Visibility
+### Minimal Magic
 
-The machine is not an enemy.
+No hidden runtime.
 
-The machine is not magic.
+No garbage collector.
 
-The machine is understandable.
+No framework lock-in.
 
-RIG exists to make that understanding practical.
+No unnecessary abstraction.
 
 ---
 
-## Initial Architecture
+## Example
 
-RIG v0 does not attempt to replace Rust.
+Without RIG:
 
-Instead, RIG stands on Rust's shoulders.
+```rust
+let users = Vec::new();
+```
+
+With RIG:
+
+```rust
+let mut arena = Arena::new("main");
+let mut users = RigVec::new(&mut arena, "users");
+```
+
+Now the allocation strategy becomes visible.
+
+The programmer can immediately see:
 
 ```text
-RIG Source
-    ↓
-RIG Frontend
-    ↓
-Rust Generation
-    ↓
-rustc
-    ↓
-LLVM
-    ↓
-Native Binary
-```
-
-This allows RIG to benefit from:
-
-* Rust's safety model
-* Rust's compiler infrastructure
-* LLVM optimization
-* Existing ecosystems
-
-while pursuing a different programming experience.
-
----
-
-## Long-Term Architecture
-
-```text
-RIG Source
-    ↓
-RIG Parser
-    ↓
-RIG Type System
-    ↓
-RIG Ownership System
-    ↓
-RIG Witness Engine
-    ↓
-RIG Intermediate Representation
-    ↓
-LLVM / Native Backends
+Allocator: main
+Container: users
+Lifetime strategy: arena-owned
 ```
 
 ---
 
-## The Witness System
+## Initial Goals
 
-The defining feature of RIG.
+### v0
 
-RIG programs do not merely execute.
+* Arena
+* RigVec
+* RigString
+* Allocation tracking
+* Allocation reporting
+* Examples
+* Tests
 
-They leave evidence.
+### v1
 
-Examples:
+* Multiple allocator strategies
+* Allocation statistics
+* Growth tracking
+* Memory reports
+* Better diagnostics
 
-```bash
-rig build
-rig run
-rig inspect
-rig replay
-rig why
-```
+### v2
 
----
-
-### Example
-
-```bash
-rig why crash
-```
-
-Output:
-
-```text
-Crash detected
-
-Cause:
-use-after-free
-
-Allocation:
-src/cache.rig:44
-
-Freed:
-src/cache.rig:91
-
-Invalid Access:
-src/router.rig:138
-
-Triggered By:
-Request #8842
-
-Build:
-ReleaseFast
-
-Machine:
-west-o
-
-Last Successful Run:
-2026-06-05 13:22 UTC
-```
+* Allocation auditing
+* Leak detection helpers
+* Resource visualization
+* Project-wide memory reporting
 
 ---
 
-## Goals
 
-### Short Term
+RIG is not:
 
-* Zig-inspired syntax
-* Rust backend
-* Clear diagnostics
-* Explicit memory model
-* Minimal runtime
-
-### Medium Term
-
-* Ownership analysis
-* Witness engine
-* Build ledger
-* Runtime ledger
-* Crash forensics
-
-### Long Term
-
-* Self-hosting compiler
-* Native backend
-* Operating system tooling
-* Reproducible infrastructure
-* Explainable computing stack
-
----
-
-## Non-Goals
-
-RIG is not attempting to become:
-
-* another garbage collected language
-* another Java clone
-* another JavaScript runtime
-* another abstraction-heavy framework
-
-RIG is for developers who want to understand the machine.
+* a programming language
+* a garbage collector
+* a framework
 
 ---
 
 ## Vision
 
-Imagine a future where software can answer:
+RIG exists because memory is too important to remain invisible.
 
-```text
-Why did this work?
+The future of systems programming is not merely safety.
 
-Why did this fail?
+The future is safety with understanding.
 
-What changed?
+Rust already protects memory.
 
-Can I recreate it?
-```
-
-without guesswork.
-
-That is the world RIG seeks to build.
-
-A world where computers leave receipts.
-
-A world where mystery is optional.
+RIG helps developers see it.
