@@ -311,3 +311,13 @@ The future is safety with understanding.
 Rust already protects memory.
 
 RIG helps developers see it.
+
+## Real workload examples
+
+RIG v0.8.0 adds deterministic workload examples that use the same tracked containers people inspect in the core API, but under larger and more realistic pressure:
+
+- ECS simulation: tracks entity IDs, positions, velocities, active entity IDs, and a frame log while loading at least 100,000 entities and running at least 60 update frames.
+- Log ingestion: tracks a raw log buffer plus parsed, warning, and error line containers while deterministically generating and ingesting at least 50,000 log lines.
+- Pathfinding: tracks frontier, visited nodes, parent edges, reconstructed path nodes, and a search log while running deterministic breadth-first search on a grid graph.
+
+Each example prints human reports, JSON reports, diffs, and growth history. These examples are intentionally deterministic, require no external files, and do not write reports unless a programmer explicitly adds persistence code.
