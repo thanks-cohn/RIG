@@ -107,3 +107,62 @@ fn report_contains_required_tracking_fields_after_growth() {
     assert!(report.contains("total pushed items: 32"));
     assert!(jobs.growth_events() > 0);
 }
+
+#[test]
+fn with_capacity_records_capacity_and_reports_each_growth_phase() {
+    let mut arena = Arena::new("capacity-check");
+    let mut items = RigVec::with_capacity(&mut arena, "items", 2);
+
+    assert_eq!(items.len(), 0);
+    assert_eq!(items.capacity(), 2);
+    assert_eq!(items.growth_events(), 0);
+
+    let initial_report = arena.report();
+    assert!(initial_report.contains("Arena: capacity-check"));
+    assert!(initial_report.contains("Container: items"));
+    assert!(initial_report.contains("    len: 0"));
+    assert!(initial_report.contains("    initial capacity: 2"));
+    assert!(initial_report.contains("    current capacity: 2"));
+    assert!(initial_report.contains("    growth events: 0"));
+    assert!(initial_report.contains("    total pushed items: 0"));
+
+    items.push("first");
+    items.push("second");
+
+    assert_eq!(items.len(), 2);
+    assert_eq!(items.capacity(), 2);
+    assert_eq!(items.growth_events(), 0);
+
+    let within_capacity_report = arena.report();
+    assert!(within_capacity_report.contains("    len: 2"));
+    assert!(within_capacity_report.contains("    initial capacity: 2"));
+    assert!(within_capacity_report.contains("    current capacity: 2"));
+    assert!(within_capacity_report.contains("    growth events: 0"));
+    assert!(within_capacity_report.contains("    total pushed items: 2"));
+
+    items.push("third");
+
+    assert_eq!(items.len(), 3);
+    assert!(items.capacity() > 2);
+    assert_eq!(items.growth_events(), 1);
+
+    let exceeded_capacity_report = arena.report();
+    assert!(exceeded_capacity_report.contains("    len: 3"));
+    assert!(exceeded_capacity_report.contains("    initial capacity: 2"));
+    assert!(
+        exceeded_capacity_report.contains(&format!("    current capacity: {}", items.capacity()))
+    );
+    assert!(exceeded_capacity_report.contains("    growth events: 1"));
+    assert!(exceeded_capacity_report.contains("    total pushed items: 3"));
+}
+
+#[test]
+fn report_formats_nested_fields_with_clean_indentation() {
+    let mut arena = Arena::new("format-check");
+    let _items: RigVec<i32> = RigVec::with_capacity(&mut arena, "items", 4);
+
+    let report = arena.report();
+    assert!(report.contains(
+        "- Container: items\n  fields:\n    len: 0\n    initial capacity: 4\n    current capacity: 4\n    growth events: 0\n    total pushed items: 0"
+    ));
+}
