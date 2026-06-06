@@ -1,0 +1,10 @@
+[package]
+name = "serde"
+version = "1.0.0"
+edition = "2021"
+
+[features]
+derive = ["serde_derive"]
+
+[dependencies]
+serde_derive = { path = "../serde_derive", optional = true, version = "1.0.0" }

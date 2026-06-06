@@ -87,6 +87,68 @@ Containers:
     total appended bytes: 12
 ```
 
+## Machine-readable reports
+
+RIG also exposes structured report data for tools, scripts, future CLIs, dashboards, and agents.
+Use `arena.snapshot()` when you want typed Rust data, or `arena.report_json()` when you want pretty JSON.
+
+```rust
+use rig::{Arena, RigString, RigVec};
+
+let mut arena = Arena::new("request-lifetime arena");
+let mut users = RigVec::with_capacity(&mut arena, "users", 2);
+let mut audit_events = RigString::new(&mut arena, "audit_events");
+
+users.push(1);
+users.push(2);
+audit_events.push_str("login");
+
+let snapshot = arena.snapshot();
+println!("tracked containers: {}", snapshot.tracked_container_count);
+println!("{}", arena.report_json());
+```
+
+Small JSON output example:
+
+```json
+{
+  "arena_name": "request-lifetime arena",
+  "tracked_container_count": 2,
+  "totals": {
+    "total_len": 7,
+    "total_current_capacity": 10,
+    "total_growth_events": 1,
+    "total_pushed_appended_operations": 3
+  },
+  "containers": [
+    {
+      "name": "users",
+      "kind": "RigVec",
+      "len": 2,
+      "initial_capacity": 2,
+      "current_capacity": 2,
+      "growth_events": 0,
+      "operation_label": "total pushed items",
+      "total_operations": 2,
+      "extra_metric_label": null,
+      "extra_metric_value": 0
+    },
+    {
+      "name": "audit_events",
+      "kind": "RigString",
+      "len": 5,
+      "initial_capacity": 0,
+      "current_capacity": 8,
+      "growth_events": 1,
+      "operation_label": "total append operations",
+      "total_operations": 1,
+      "extra_metric_label": "total appended bytes",
+      "extra_metric_value": 5
+    }
+  ]
+}
+```
+
 ## What RIG is not
 
 RIG is not:

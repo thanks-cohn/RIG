@@ -148,6 +148,49 @@ Lifetime strategy: arena-owned
 
 ---
 
+
+## Machine-readable reports
+
+RIG v0.3.0 adds structured arena report data for tools, scripts, future CLIs, dashboards, and agents.
+Use `arena.snapshot()` for typed Rust data and `arena.report_json()` for pretty JSON output.
+
+```rust
+let snapshot = arena.snapshot();
+println!("tracked containers: {}", snapshot.tracked_container_count);
+println!("{}", arena.report_json());
+```
+
+Small JSON output example:
+
+```json
+{
+  "arena_name": "main",
+  "tracked_container_count": 1,
+  "totals": {
+    "total_len": 2,
+    "total_current_capacity": 4,
+    "total_growth_events": 0,
+    "total_pushed_appended_operations": 2
+  },
+  "containers": [
+    {
+      "name": "users",
+      "kind": "RigVec",
+      "len": 2,
+      "initial_capacity": 4,
+      "current_capacity": 4,
+      "growth_events": 0,
+      "operation_label": "total pushed items",
+      "total_operations": 2,
+      "extra_metric_label": null,
+      "extra_metric_value": 0
+    }
+  ]
+}
+```
+
+---
+
 ## Initial Goals
 
 ### v0

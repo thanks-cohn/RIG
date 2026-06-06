@@ -1,0 +1,7 @@
+[package]
+name = "serde_json"
+version = "1.0.0"
+edition = "2021"
+
+[dependencies]
+serde = { path = "../serde", version = "1.0.0" }

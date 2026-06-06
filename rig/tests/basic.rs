@@ -297,3 +297,117 @@ fn report_formats_nested_fields_with_clean_indentation() {
 
     assert_eq!(report, expected);
 }
+
+#[test]
+fn snapshot_contains_arena_name_and_tracked_container_count() {
+    let mut arena = Arena::new("snapshot-check");
+    let _items: RigVec<i32> = RigVec::new(&mut arena, "items");
+    let _audit = RigString::new(&mut arena, "audit_events");
+
+    let snapshot = arena.snapshot();
+
+    assert_eq!(snapshot.arena_name, "snapshot-check");
+    assert_eq!(snapshot.tracked_container_count, 2);
+}
+
+#[test]
+fn snapshot_totals_match_report_totals() {
+    let mut arena = Arena::new("totals-check");
+    let mut items = RigVec::with_capacity(&mut arena, "items", 2);
+    let mut audit = RigString::with_capacity(&mut arena, "audit_events", 8);
+
+    items.push(1);
+    items.push(2);
+    audit.push_str("login");
+
+    let snapshot = arena.snapshot();
+    let report = arena.report();
+
+    assert!(report.contains(&format!("  total len: {}", snapshot.totals.total_len)));
+    assert!(report.contains(&format!(
+        "  total current capacity: {}",
+        snapshot.totals.total_current_capacity
+    )));
+    assert!(report.contains(&format!(
+        "  total growth events: {}",
+        snapshot.totals.total_growth_events
+    )));
+    assert!(report.contains(&format!(
+        "  total pushed/appended operations: {}",
+        snapshot.totals.total_pushed_appended_operations
+    )));
+}
+
+#[test]
+fn snapshot_includes_vec_and_string_container_kinds() {
+    let mut arena = Arena::new("kind-check");
+    let _items: RigVec<i32> = RigVec::new(&mut arena, "items");
+    let _audit = RigString::new(&mut arena, "audit_events");
+
+    let snapshot = arena.snapshot();
+
+    assert!(snapshot
+        .containers
+        .iter()
+        .any(|container| container.kind == "RigVec"));
+    assert!(snapshot
+        .containers
+        .iter()
+        .any(|container| container.kind == "RigString"));
+}
+
+#[test]
+fn snapshot_includes_capacity_and_growth_fields() {
+    let mut arena = Arena::new("field-check");
+    let mut items = RigVec::with_capacity(&mut arena, "items", 1);
+    let mut audit = RigString::with_capacity(&mut arena, "audit_events", 4);
+
+    items.push("first");
+    items.push("second");
+    audit.push_str("1234");
+    audit.push_str("5");
+
+    let snapshot = arena.snapshot();
+    let item_report = snapshot
+        .containers
+        .iter()
+        .find(|container| container.name == "items")
+        .expect("items container should be tracked");
+    let audit_report = snapshot
+        .containers
+        .iter()
+        .find(|container| container.name == "audit_events")
+        .expect("audit_events container should be tracked");
+
+    assert_eq!(item_report.initial_capacity, 1);
+    assert!(item_report.current_capacity > item_report.initial_capacity);
+    assert_eq!(item_report.growth_events, 1);
+    assert_eq!(audit_report.initial_capacity, 4);
+    assert!(audit_report.current_capacity > audit_report.initial_capacity);
+    assert_eq!(audit_report.growth_events, 1);
+}
+
+#[test]
+fn report_json_is_valid_json_and_contains_arena_name() {
+    let arena = Arena::new("json-check");
+
+    let value: serde_json::Value =
+        serde_json::from_str(&arena.report_json()).expect("report_json should be valid JSON");
+
+    assert_eq!(value["arena_name"], "json-check");
+}
+
+#[test]
+fn report_json_round_trips_into_arena_report() {
+    let mut arena = Arena::new("round-trip-check");
+    let mut items = RigVec::new(&mut arena, "items");
+    let mut audit = RigString::new(&mut arena, "audit_events");
+
+    items.push(1);
+    audit.push_str("created");
+
+    let decoded: rig::ArenaReport = serde_json::from_str(&arena.report_json())
+        .expect("report_json should deserialize into ArenaReport");
+
+    assert_eq!(decoded, arena.snapshot());
+}

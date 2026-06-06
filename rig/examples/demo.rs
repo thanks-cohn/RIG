@@ -24,4 +24,6 @@ fn main() {
 
     println!("Rust is still safe, but allocation and growth behavior is now visible.\n");
     println!("{}", arena.report());
+    println!();
+    println!("{}", arena.report_json());
 }
