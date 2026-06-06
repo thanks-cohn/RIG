@@ -357,3 +357,26 @@ let summary_json = arena.growth_summary_json();
 `GrowthSummary` and `ContainerGrowthSummary` derive every number from observed `GrowthEvent` data: total growth events, containers with growth, largest capacity delta, first and last growth events, per-container first and final capacities, and operation-index bounds. JSON remains machine-readable through `arena.report_json()` for full reports and `arena.growth_summary_json()` for compact summary data.
 
 This solves the console flood problem found in real policy-comparison workloads: `Exact` can preserve 50,000 raw events for analysis while the default human report stays compact, and `report_verbose()` remains available for full evidence.
+
+## Allocation attribution
+
+RIG v0.11.0 adds causality for growth events. Reports now explain not only that a tracked container grew, but which operation caused the observed growth, how much capacity was added, which growth policy was active, and how much total capacity expansion has accumulated over that container's lifetime.
+
+New attribution fields are derived from live `GrowthEvent` evidence:
+
+- `ContainerReport::total_capacity_added`
+- `ContainerReport::largest_growth_jump`
+- `ContainerReport::average_growth_jump`
+- `GrowthEvent::capacity_added`
+- `GrowthEvent::growth_policy`
+- `ArenaReport::growth_attributions`
+
+`ArenaReport::top_growth_containers()` returns containers ordered by lifetime `total_capacity_added`, largest first. Human reports include a `Top growth contributors:` section so memory-heavy containers are visible without scanning every event. JSON reports include attribution data and still round-trip through `serde_json`.
+
+Run the attribution example to see a large string buffer, a large vector, and a mixed workload produce ranked contributors, causal attribution events, and machine-readable report JSON:
+
+```bash
+cargo run --example allocation_attribution
+```
+
+All allocation numbers remain observed values from tracked container state and recorded growth events. RIG does not estimate capacity, invent memory totals, create hidden files, or persist reports unless the caller explicitly invokes a write method.
