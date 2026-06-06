@@ -145,7 +145,7 @@ impl Arena {
 
         for record in &inner.records {
             report.push_str(&format!(
-                "\n- Container: {}\n  kind: {}\n  fields:\n    len: {}\n    initial capacity: {}\n    current capacity: {}\n    growth events: {}\n    {}: {}",
+                "\n  Container: {}\n  kind: {}\n  fields:\n    len: {}\n    initial capacity: {}\n    current capacity: {}\n    growth events: {}\n    {}: {}",
                 record.name,
                 record.kind.as_str(),
                 record.len,
