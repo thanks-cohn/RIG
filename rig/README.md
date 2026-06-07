@@ -301,3 +301,20 @@ cargo run --example allocation_attribution
 ```
 
 All allocation numbers remain observed values from tracked container state and recorded growth events. RIG does not estimate capacity, invent memory totals, create hidden files, or persist reports unless the caller explicitly invokes a write method.
+
+---
+
+## Memory regression gates
+
+RIG can compare a baseline `ArenaReport` with a current `ArenaReport` and produce a typed `RegressionReport`. The report contains inspectable `MemoryRegression` evidence whenever total capacity, total growth events, per-container capacity, or per-container growth events exceed a configured `RegressionBudget`.
+
+This is useful for CI and education: students can show that a workload did not regress, teachers can grade real memory behavior instead of claims, and teams can fail builds when observed memory-growth evidence exceeds policy.
+
+All regression-gate numbers come from observed RIG reports (`ArenaReport`, `ContainerReport`, and growth-event evidence), not estimates, hidden measurements, or synthetic benchmark guesses. Regression gates do not write files automatically; `report()` and `report_json()` return strings, and persistence remains explicitly caller-controlled.
+
+```rust
+let report = current.check_regressions_against(&baseline, &rig::RegressionBudget::strict());
+assert!(report.passed || !report.regressions.is_empty());
+println!("{}", report.report());
+println!("{}", report.report_json());
+```

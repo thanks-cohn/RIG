@@ -376,6 +376,85 @@ pub struct ArenaReport {
     pub growth_attributions: Vec<GrowthAttribution>,
 }
 
+/// Typed evidence for one memory regression that exceeded a configured budget.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MemoryRegression {
+    /// Container name for per-container regressions, or `total` for aggregate regressions.
+    pub container_name: String,
+    /// Metric that regressed, such as `current_capacity` or `growth_events`.
+    pub metric: String,
+    /// Baseline value from the previous [`ArenaReport`].
+    pub baseline: usize,
+    /// Current value from the report being checked.
+    pub current: usize,
+    /// Positive observed increase from `baseline` to `current`.
+    pub delta: usize,
+    /// Increase allowed by the configured [`RegressionBudget`].
+    pub allowed_delta: usize,
+}
+
+/// Configurable memory-regression budget used when comparing two reports.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RegressionBudget {
+    /// Maximum allowed aggregate capacity increase, or `None` to skip that gate.
+    pub max_total_capacity_delta: Option<usize>,
+    /// Maximum allowed aggregate growth-event increase, or `None` to skip that gate.
+    pub max_total_growth_events_delta: Option<usize>,
+    /// Maximum allowed per-container capacity increase, or `None` to skip that gate.
+    pub max_container_capacity_delta: Option<usize>,
+    /// Maximum allowed per-container growth-event increase, or `None` to skip that gate.
+    pub max_container_growth_events_delta: Option<usize>,
+}
+
+impl RegressionBudget {
+    /// Return a budget that permits no capacity or growth-event increase.
+    pub fn strict() -> Self {
+        Self {
+            max_total_capacity_delta: Some(0),
+            max_total_growth_events_delta: Some(0),
+            max_container_capacity_delta: Some(0),
+            max_container_growth_events_delta: Some(0),
+        }
+    }
+
+    /// Return a budget that permits `delta` capacity growth globally and per container.
+    ///
+    /// Growth-event gates remain strict.
+    pub fn allow_capacity_delta(delta: usize) -> Self {
+        Self {
+            max_total_capacity_delta: Some(delta),
+            max_total_growth_events_delta: Some(0),
+            max_container_capacity_delta: Some(delta),
+            max_container_growth_events_delta: Some(0),
+        }
+    }
+
+    /// Return a budget that permits `delta` growth-event increase globally and per container.
+    ///
+    /// Capacity gates remain strict.
+    pub fn allow_growth_events_delta(delta: usize) -> Self {
+        Self {
+            max_total_capacity_delta: Some(0),
+            max_total_growth_events_delta: Some(delta),
+            max_container_capacity_delta: Some(0),
+            max_container_growth_events_delta: Some(delta),
+        }
+    }
+}
+
+/// Machine-readable result of checking one report against another.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RegressionReport {
+    /// Whether all configured regression gates passed.
+    pub passed: bool,
+    /// Typed evidence for every failed gate.
+    pub regressions: Vec<MemoryRegression>,
+    /// Signed aggregate capacity delta from baseline to current.
+    pub total_capacity_delta: isize,
+    /// Signed aggregate growth-event delta from baseline to current.
+    pub total_growth_event_delta: isize,
+}
+
 /// Machine-readable change evidence between two reports for one shared container.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ContainerDiff {
@@ -501,6 +580,82 @@ impl ArenaReport {
         fs::write(path, self.report_json())
     }
 
+    /// Check this current report against a baseline report using memory regression gates.
+    ///
+    /// `self` is the current report and `baseline` is the previous report.
+    /// Increases beyond the configured [`RegressionBudget`] produce typed
+    /// [`MemoryRegression`] evidence. Improvements and removed containers do
+    /// not fail. Containers present only in `self` are compared against zero.
+    pub fn check_regressions_against(
+        &self,
+        baseline: &ArenaReport,
+        budget: &RegressionBudget,
+    ) -> RegressionReport {
+        let total_capacity_delta = signed_delta_isize(
+            baseline.totals.total_current_capacity,
+            self.totals.total_current_capacity,
+        );
+        let total_growth_event_delta = signed_delta_isize(
+            baseline.totals.total_growth_events,
+            self.totals.total_growth_events,
+        );
+        let mut regressions = Vec::new();
+
+        push_regression_if_over_budget(
+            &mut regressions,
+            "total",
+            "total_current_capacity",
+            baseline.totals.total_current_capacity,
+            self.totals.total_current_capacity,
+            budget.max_total_capacity_delta,
+        );
+        push_regression_if_over_budget(
+            &mut regressions,
+            "total",
+            "total_growth_events",
+            baseline.totals.total_growth_events,
+            self.totals.total_growth_events,
+            budget.max_total_growth_events_delta,
+        );
+
+        let baseline_by_name: BTreeMap<&str, &ContainerReport> = baseline
+            .containers
+            .iter()
+            .map(|container| (container.name.as_str(), container))
+            .collect();
+
+        for current in &self.containers {
+            let (baseline_capacity, baseline_growth_events) = baseline_by_name
+                .get(current.name.as_str())
+                .map(|container| (container.current_capacity, container.growth_events))
+                .unwrap_or((0, 0));
+
+            push_regression_if_over_budget(
+                &mut regressions,
+                &current.name,
+                "current_capacity",
+                baseline_capacity,
+                current.current_capacity,
+                budget.max_container_capacity_delta,
+            );
+            push_regression_if_over_budget(
+                &mut regressions,
+                &current.name,
+                "growth_events",
+                baseline_growth_events,
+                current.growth_events,
+                budget.max_container_growth_events_delta,
+            );
+        }
+
+        RegressionReport {
+            passed: regressions.is_empty(),
+            regressions,
+            total_capacity_delta,
+            total_growth_event_delta,
+        }
+    }
+
     /// Compare this earlier report with a later report.
     ///
     /// Containers are matched by name. Containers present only in the later
@@ -591,6 +746,60 @@ impl ContainerDiff {
             after_operations: after.total_operations,
             operation_delta: signed_delta(before.total_operations, after.total_operations),
         }
+    }
+}
+
+impl RegressionReport {
+    /// Serialize this regression report as pretty JSON.
+    ///
+    /// This is an in-memory operation and does not write files.
+    pub fn report_json(&self) -> String {
+        serde_json::to_string_pretty(self).expect("serializing a RegressionReport should not fail")
+    }
+
+    /// Return a human-readable memory regression report.
+    pub fn report(&self) -> String {
+        self.to_string()
+    }
+}
+
+impl fmt::Display for RegressionReport {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(formatter, "RIG memory regression report")?;
+        writeln!(
+            formatter,
+            "Status: {}",
+            if self.passed { "PASSED" } else { "FAILED" }
+        )?;
+        writeln!(formatter)?;
+        writeln!(
+            formatter,
+            "Total capacity delta: {}",
+            format_delta_isize(self.total_capacity_delta)
+        )?;
+        writeln!(
+            formatter,
+            "Total growth event delta: {}",
+            format_delta_isize(self.total_growth_event_delta)
+        )?;
+        writeln!(formatter)?;
+        writeln!(formatter, "Regressions:")?;
+        if self.regressions.is_empty() {
+            write!(formatter, "  (none)")?;
+        } else {
+            for (index, regression) in self.regressions.iter().enumerate() {
+                writeln!(formatter, "{}. {}", index + 1, regression.container_name)?;
+                writeln!(formatter, "   metric: {}", regression.metric)?;
+                writeln!(formatter, "   baseline: {}", regression.baseline)?;
+                writeln!(formatter, "   current: {}", regression.current)?;
+                writeln!(formatter, "   delta: {}", regression.delta)?;
+                write!(formatter, "   allowed delta: {}", regression.allowed_delta)?;
+                if index + 1 < self.regressions.len() {
+                    writeln!(formatter)?;
+                }
+            }
+        }
+        Ok(())
     }
 }
 
@@ -719,6 +928,46 @@ impl fmt::Display for ArenaDiff {
 enum GrowthHistoryMode {
     Compact,
     Verbose,
+}
+
+fn push_regression_if_over_budget(
+    regressions: &mut Vec<MemoryRegression>,
+    container_name: &str,
+    metric: &str,
+    baseline: usize,
+    current: usize,
+    allowed_delta: Option<usize>,
+) {
+    let Some(allowed_delta) = allowed_delta else {
+        return;
+    };
+    let delta = current.saturating_sub(baseline);
+    if delta > allowed_delta {
+        regressions.push(MemoryRegression {
+            container_name: container_name.to_owned(),
+            metric: metric.to_owned(),
+            baseline,
+            current,
+            delta,
+            allowed_delta,
+        });
+    }
+}
+
+fn signed_delta_isize(before: usize, after: usize) -> isize {
+    if after >= before {
+        after.saturating_sub(before).min(isize::MAX as usize) as isize
+    } else {
+        -(before.saturating_sub(after).min(isize::MAX as usize) as isize)
+    }
+}
+
+fn format_delta_isize(delta: isize) -> String {
+    if delta >= 0 {
+        format!("+{delta}")
+    } else {
+        delta.to_string()
+    }
 }
 
 fn summarize_growth_events(events: &[GrowthEvent]) -> GrowthSummary {

@@ -163,3 +163,13 @@ cargo tree --manifest-path rig/Cargo.toml
 # Remove Cargo build artifacts when a clean rebuild is needed.
 cargo clean --manifest-path rig/Cargo.toml
 ```
+
+```bash
+cargo run --example regression_gate
+# Run memory regression gate example.
+```
+
+```bash
+cargo test regression
+# Run regression-gate tests.
+```
