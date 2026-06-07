@@ -1,3 +1,6 @@
 rig/target/
 target/
 **/target/
+
+# Generated validation logs
+logs/*.log
