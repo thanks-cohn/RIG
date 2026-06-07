@@ -380,3 +380,32 @@ cargo run --example allocation_attribution
 ```
 
 All allocation numbers remain observed values from tracked container state and recorded growth events. RIG does not estimate capacity, invent memory totals, create hidden files, or persist reports unless the caller explicitly invokes a write method.
+
+---
+
+## Memory regression gates
+
+RIG can compare a baseline `ArenaReport` with a current `ArenaReport` and return typed memory regression evidence. This helps students prove their program did not regress, teachers grade real resource behavior, and teams catch memory-growth regressions in CI before they become production problems.
+
+The gate API is evidence-based: `ArenaReport::check_regressions_against(&baseline, &budget)` compares observed report totals and per-container fields, then returns a `RegressionReport` containing `MemoryRegression` entries for capacity or growth-event increases beyond the configured `RegressionBudget`.
+
+The numbers come from observed RIG reports (`ArenaReport`, `ContainerReport`, and growth-event-derived counts), not estimates, synthetic benchmark scores, or guessed capacities. RIG does not automatically write files for regression gates; human output and JSON output are in-memory strings unless the caller explicitly writes them somewhere.
+
+```rust
+use rig::{Arena, RegressionBudget, RigVec};
+
+let mut baseline_arena = Arena::new("baseline");
+let mut baseline_values = RigVec::with_capacity(&mut baseline_arena, "values", 4);
+baseline_values.push(1);
+let baseline = baseline_arena.snapshot();
+
+let mut current_arena = Arena::new("current");
+let mut current_values = RigVec::with_capacity(&mut current_arena, "values", 4);
+for value in 0..8 {
+    current_values.push(value);
+}
+let current = current_arena.snapshot();
+
+let gate = current.check_regressions_against(&baseline, &RegressionBudget::strict());
+println!("{}", gate.report());
+```
