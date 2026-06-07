@@ -358,3 +358,11 @@ RIG evidence can be exported to CSV or JSON Lines when a caller explicitly asks 
 
 These exports are useful for classrooms, CI artifacts, spreadsheets, grading scripts, report viewers, release validation, and reproducible memory audits outside Rust. Exported values come from observed RIG evidence already present in reports; RIG does not invent metrics, estimate capacities, automatically persist exports, or create hidden files.
 
+
+## Workload contracts
+
+RIG can validate explicit memory behavior contracts for named workloads. A `WorkloadContract` combines caller-provided memory budgets, regression gates, and evidence profile requirements into one typed check that answers whether the workload honored the memory behavior it promised.
+
+Workload contracts are useful for CI gates, classroom grading, game-level validation, benchmark discipline, release certification, and reproducible audits because every `ContractReport` is derived from observed RIG evidence such as `ArenaReport`, `BudgetReport`, `RegressionReport`, `ProfileReport`, and `ArtifactComparison` data.
+
+Contract reports are typed, can be rendered as human-readable text, and JSON round-trip through `serde_json`. Contracts use observed evidence only: RIG does not add fake metrics, estimate capacity, infer missing rules, write files automatically, create hidden files, or persist anything unless the caller explicitly chooses a persistence API elsewhere.

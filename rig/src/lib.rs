@@ -601,6 +601,55 @@ impl ArtifactComparisonSummary<'_> {
     }
 }
 
+/// Named, typed declaration of expected memory behavior for one workload.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkloadContract {
+    /// Human-readable contract name supplied by the caller.
+    pub name: String,
+    /// Human-readable contract description supplied by the caller.
+    pub description: String,
+    /// Optional memory budget checked against the current arena report.
+    pub budget: Option<MemoryBudget>,
+    /// Optional regression budget checked against baseline/current evidence.
+    pub regression_budget: Option<RegressionBudget>,
+    /// Profile kinds that must be absent from current profile evidence.
+    pub required_profiles_absent: Vec<MemoryProfileKind>,
+    /// Profile kinds that must be present in current profile evidence.
+    pub required_profiles_present: Vec<MemoryProfileKind>,
+}
+
+/// Typed evidence for one workload-contract rule failure.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContractViolation {
+    /// Contract name whose rule failed.
+    pub contract_name: String,
+    /// Rule category that failed, such as `budget`, `regression`, `profile_absent`, or `profile_present`.
+    pub rule: String,
+    /// Arena, container, profile subject, or comparison subject for the failed rule.
+    pub subject: String,
+    /// Deterministic explanation of the failed rule.
+    pub reason: String,
+    /// Exact observed evidence and configured threshold used for the failure.
+    pub evidence: String,
+}
+
+/// In-memory result of validating one [`WorkloadContract`] against observed RIG evidence.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContractReport {
+    /// Contract name that was evaluated.
+    pub contract_name: String,
+    /// Whether every explicit contract rule passed.
+    pub passed: bool,
+    /// Typed evidence for every failed contract rule.
+    pub violations: Vec<ContractViolation>,
+    /// Budget gate evidence, present only when the contract included a memory budget.
+    pub budget_report: Option<BudgetReport>,
+    /// Regression gate evidence, present only when artifact comparison evaluated a regression budget.
+    pub regression_report: Option<RegressionReport>,
+    /// Profile evidence, present only when the contract included profile requirements.
+    pub profile_report: Option<ProfileReport>,
+}
+
 /// Explicit memory behavior budget checked against one observed [`ArenaReport`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MemoryBudget {
@@ -620,6 +669,97 @@ pub struct MemoryBudget {
     pub max_container_growth_events: Option<usize>,
     /// Maximum allowed push/append operation count for each container, or `None` to skip this gate.
     pub max_container_operations: Option<usize>,
+}
+
+impl WorkloadContract {
+    /// Create a named workload contract with no rules.
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            description: String::new(),
+            budget: None,
+            regression_budget: None,
+            required_profiles_absent: Vec::new(),
+            required_profiles_present: Vec::new(),
+        }
+    }
+
+    /// Set a human-readable description for this workload contract.
+    pub fn with_description(mut self, description: impl Into<String>) -> Self {
+        self.description = description.into();
+        self
+    }
+
+    /// Require the current report to satisfy the provided memory budget.
+    pub fn with_budget(mut self, budget: MemoryBudget) -> Self {
+        self.budget = Some(budget);
+        self
+    }
+
+    /// Require a comparison to satisfy the provided regression budget.
+    pub fn with_regression_budget(mut self, budget: RegressionBudget) -> Self {
+        self.regression_budget = Some(budget);
+        self
+    }
+
+    /// Require the current profile report not to contain `kind`.
+    pub fn require_profile_absent(mut self, kind: MemoryProfileKind) -> Self {
+        self.required_profiles_absent.push(kind);
+        self
+    }
+
+    /// Require the current profile report to contain `kind`.
+    pub fn require_profile_present(mut self, kind: MemoryProfileKind) -> Self {
+        self.required_profiles_present.push(kind);
+        self
+    }
+
+    fn has_profile_rules(&self) -> bool {
+        !self.required_profiles_absent.is_empty() || !self.required_profiles_present.is_empty()
+    }
+}
+
+impl ContractReport {
+    /// Return a human-readable workload contract report.
+    pub fn report(&self) -> String {
+        self.to_string()
+    }
+
+    /// Serialize this contract report as pretty JSON.
+    ///
+    /// This is an in-memory operation and does not write files.
+    pub fn report_json(&self) -> String {
+        serde_json::to_string_pretty(self).expect("serializing a ContractReport should not fail")
+    }
+}
+
+impl fmt::Display for ContractReport {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(formatter, "RIG workload contract report")?;
+        writeln!(formatter, "Contract: {}", self.contract_name)?;
+        writeln!(
+            formatter,
+            "Status: {}",
+            if self.passed { "PASSED" } else { "FAILED" }
+        )?;
+        writeln!(formatter)?;
+        writeln!(formatter, "Violations:")?;
+        if self.violations.is_empty() {
+            write!(formatter, "  (none)")?;
+        } else {
+            for (index, violation) in self.violations.iter().enumerate() {
+                writeln!(formatter, "{}. {}", index + 1, violation.rule)?;
+                writeln!(formatter, "   subject: {}", violation.subject)?;
+                writeln!(formatter, "   reason: {}", violation.reason)?;
+                write!(formatter, "   evidence: {}", violation.evidence)?;
+                if index + 1 < self.violations.len() {
+                    writeln!(formatter)?;
+                    writeln!(formatter)?;
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 impl MemoryBudget {
@@ -915,6 +1055,25 @@ impl ArtifactComparison {
         self.current.check_budget(budget)
     }
 
+    /// Check this artifact comparison against an explicit workload contract.
+    ///
+    /// The current artifact report is used for budget and profile rules. The
+    /// baseline/current artifact reports are used for regression rules. No
+    /// files are written by this method.
+    pub fn check_contract(&self, contract: &WorkloadContract) -> ContractReport {
+        let budget_report = contract
+            .budget
+            .as_ref()
+            .map(|budget| self.current.check_budget(budget));
+        let regression_report = contract
+            .regression_budget
+            .as_ref()
+            .map(|budget| self.regression_report(budget));
+        let profile_report = contract.has_profile_rules().then(|| self.current.profile());
+
+        build_contract_report(contract, budget_report, regression_report, profile_report)
+    }
+
     /// Classify the current artifact report and positive comparison deltas as evidence profiles.
     pub fn profile(&self) -> ProfileReport {
         let mut profiles = self.current.profile().profiles;
@@ -1165,6 +1324,22 @@ fn profile_arena_report(report: &ArenaReport) -> ProfileReport {
 }
 
 impl ArenaReport {
+    /// Check this report against an explicit workload contract.
+    ///
+    /// Budget and profile rules use only values already present in this
+    /// [`ArenaReport`] or derived by existing RIG profile logic. Regression
+    /// rules require baseline evidence and are therefore ignored for a single
+    /// report rather than inferred.
+    pub fn check_contract(&self, contract: &WorkloadContract) -> ContractReport {
+        let budget_report = contract
+            .budget
+            .as_ref()
+            .map(|budget| self.check_budget(budget));
+        let profile_report = contract.has_profile_rules().then(|| self.profile());
+
+        build_contract_report(contract, budget_report, None, profile_report)
+    }
+
     /// Check this report against explicit memory behavior limits.
     ///
     /// Budget checks use only values already present in this [`ArenaReport`]
@@ -1946,6 +2121,97 @@ impl fmt::Display for ArenaDiff {
         }
 
         Ok(())
+    }
+}
+
+fn build_contract_report(
+    contract: &WorkloadContract,
+    budget_report: Option<BudgetReport>,
+    regression_report: Option<RegressionReport>,
+    profile_report: Option<ProfileReport>,
+) -> ContractReport {
+    let mut violations = Vec::new();
+
+    if let Some(report) = &budget_report {
+        violations.extend(report.violations.iter().map(|violation| {
+            let subject = match &violation.container_name {
+                Some(container_name) => container_name.clone(),
+                None => violation.scope.clone(),
+            };
+            ContractViolation {
+                contract_name: contract.name.clone(),
+                rule: "budget".to_owned(),
+                subject,
+                reason: format!("{} exceeded limit", violation.metric),
+                evidence: format!(
+                    "observed {}, limit {}, exceeded by {}",
+                    violation.observed, violation.limit, violation.exceeded_by
+                ),
+            }
+        }));
+    }
+
+    if let Some(report) = &regression_report {
+        violations.extend(
+            report
+                .regressions
+                .iter()
+                .map(|regression| ContractViolation {
+                    contract_name: contract.name.clone(),
+                    rule: "regression".to_owned(),
+                    subject: regression.container_name.clone(),
+                    reason: format!("{} delta exceeded allowed delta", regression.metric),
+                    evidence: format!(
+                        "baseline {}, current {}, delta {}, allowed delta {}",
+                        regression.baseline,
+                        regression.current,
+                        regression.delta,
+                        regression.allowed_delta
+                    ),
+                }),
+        );
+    }
+
+    if let Some(report) = &profile_report {
+        for required_absent in &contract.required_profiles_absent {
+            for profile in report.profiles_by_kind(*required_absent) {
+                violations.push(ContractViolation {
+                    contract_name: contract.name.clone(),
+                    rule: "profile_absent".to_owned(),
+                    subject: profile.subject.clone(),
+                    reason: format!("forbidden profile {} was present", profile.kind),
+                    evidence: format!(
+                        "{}={} threshold={}",
+                        profile.evidence_metric, profile.evidence_value, profile.threshold
+                    ),
+                });
+            }
+        }
+
+        for required_present in &contract.required_profiles_present {
+            let matches = report.profiles_by_kind(*required_present);
+            if matches.is_empty() {
+                violations.push(ContractViolation {
+                    contract_name: contract.name.clone(),
+                    rule: "profile_present".to_owned(),
+                    subject: contract.name.clone(),
+                    reason: format!("required profile {required_present} was missing"),
+                    evidence: format!(
+                        "profile_count={} matching_kind_count=0",
+                        report.profiles.len()
+                    ),
+                });
+            }
+        }
+    }
+
+    ContractReport {
+        contract_name: contract.name.clone(),
+        passed: violations.is_empty(),
+        violations,
+        budget_report,
+        regression_report,
+        profile_report,
     }
 }
 
