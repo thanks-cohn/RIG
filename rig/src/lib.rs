@@ -407,6 +407,128 @@ pub struct ArenaReport {
     pub growth_attributions: Vec<GrowthAttribution>,
 }
 
+/// Deterministic memory behavior profile names derived from observed RIG evidence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MemoryProfileKind {
+    /// No observed growth events were present in the profiled evidence.
+    Stable,
+    /// Capacity growth is concentrated in one container.
+    BurstGrowth,
+    /// Many observed growth events had a small average capacity jump.
+    FrequentTinyGrowth,
+    /// One observed growth event added a large amount of capacity.
+    LargeSingleJump,
+    /// Current capacity is much larger than current logical length.
+    OverReserved,
+    /// Growth-event count is high relative to logical length.
+    UnderReserved,
+    /// A memory budget gate failed.
+    BudgetRisk,
+    /// A regression gate or comparison risk signal failed.
+    RegressionRisk,
+}
+
+impl MemoryProfileKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Stable => "Stable",
+            Self::BurstGrowth => "BurstGrowth",
+            Self::FrequentTinyGrowth => "FrequentTinyGrowth",
+            Self::LargeSingleJump => "LargeSingleJump",
+            Self::OverReserved => "OverReserved",
+            Self::UnderReserved => "UnderReserved",
+            Self::BudgetRisk => "BudgetRisk",
+            Self::RegressionRisk => "RegressionRisk",
+        }
+    }
+}
+
+impl fmt::Display for MemoryProfileKind {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+/// One deterministic profile finding with the exact evidence metric that triggered it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MemoryProfile {
+    /// Profile category assigned from observed evidence.
+    pub kind: MemoryProfileKind,
+    /// Arena, container, gate, or comparison subject for this finding.
+    pub subject: String,
+    /// Deterministic explanation of the threshold comparison.
+    pub reason: String,
+    /// Name of the observed metric used as evidence.
+    pub evidence_metric: String,
+    /// Observed metric value.
+    pub evidence_value: usize,
+    /// Deterministic threshold used for this profile.
+    pub threshold: usize,
+}
+
+/// In-memory profile report derived from observed RIG evidence.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProfileReport {
+    /// Deterministic profile findings.
+    pub profiles: Vec<MemoryProfile>,
+}
+
+impl ProfileReport {
+    /// Return a human-readable evidence profile report.
+    pub fn report(&self) -> String {
+        self.to_string()
+    }
+
+    /// Serialize this profile report as pretty JSON.
+    ///
+    /// This is an in-memory operation and does not write files.
+    pub fn report_json(&self) -> String {
+        serde_json::to_string_pretty(self).expect("serializing a ProfileReport should not fail")
+    }
+
+    /// Return all profiles with the requested kind, preserving report order.
+    pub fn profiles_by_kind(&self, kind: MemoryProfileKind) -> Vec<&MemoryProfile> {
+        self.profiles
+            .iter()
+            .filter(|profile| profile.kind == kind)
+            .collect()
+    }
+}
+
+impl fmt::Display for ProfileReport {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(formatter, "RIG evidence profile report")?;
+        writeln!(formatter, "Profiles: {}", self.profiles.len())?;
+        if self.profiles.is_empty() {
+            write!(formatter, "  (none)")?;
+        } else {
+            for (index, profile) in self.profiles.iter().enumerate() {
+                writeln!(formatter, "{}. {}", index + 1, profile.kind)?;
+                writeln!(formatter, "   subject: {}", profile.subject)?;
+                writeln!(formatter, "   reason: {}", profile.reason)?;
+                writeln!(formatter, "   evidence metric: {}", profile.evidence_metric)?;
+                writeln!(formatter, "   evidence value: {}", profile.evidence_value)?;
+                write!(formatter, "   threshold: {}", profile.threshold)?;
+                if index + 1 < self.profiles.len() {
+                    writeln!(formatter)?;
+                    writeln!(formatter)?;
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+const FREQUENT_TINY_GROWTH_MIN_EVENTS: usize = 8;
+const FREQUENT_TINY_GROWTH_MAX_AVERAGE_JUMP: usize = 4;
+const LARGE_SINGLE_JUMP_MIN_CAPACITY_ADDED: usize = 1024;
+const BURST_GROWTH_MIN_TOTAL_CAPACITY_ADDED: usize = 16;
+const BURST_GROWTH_MIN_TOP_CONTAINER_PERCENT: usize = 80;
+const OVER_RESERVED_MIN_CAPACITY: usize = 16;
+const OVER_RESERVED_CAPACITY_TO_LEN_RATIO: usize = 4;
+const UNDER_RESERVED_MIN_GROWTH_EVENTS: usize = 8;
+const UNDER_RESERVED_MAX_LEN_PER_GROWTH_EVENT: usize = 4;
+
 /// A saved RIG report artifact loaded from, or written to, an explicit caller-provided path.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReportArtifact {
@@ -793,6 +915,46 @@ impl ArtifactComparison {
         self.current.check_budget(budget)
     }
 
+    /// Classify the current artifact report and positive comparison deltas as evidence profiles.
+    pub fn profile(&self) -> ProfileReport {
+        let mut profiles = self.current.profile().profiles;
+        if self.diff.total_capacity_delta > 0 {
+            let value = self.diff.total_capacity_delta as usize;
+            profiles.push(MemoryProfile {
+                kind: MemoryProfileKind::RegressionRisk,
+                subject: format!(
+                    "artifact comparison {} -> {}",
+                    self.baseline_path.display(),
+                    self.current_path.display()
+                ),
+                reason: format!(
+                    "current artifact total capacity increased by {value}; threshold is 0 positive capacity delta"
+                ),
+                evidence_metric: "diff.total_capacity_delta".to_owned(),
+                evidence_value: value,
+                threshold: 0,
+            });
+        }
+        if self.diff.total_growth_event_delta > 0 {
+            let value = self.diff.total_growth_event_delta as usize;
+            profiles.push(MemoryProfile {
+                kind: MemoryProfileKind::RegressionRisk,
+                subject: format!(
+                    "artifact comparison {} -> {}",
+                    self.baseline_path.display(),
+                    self.current_path.display()
+                ),
+                reason: format!(
+                    "current artifact growth events increased by {value}; threshold is 0 positive growth-event delta"
+                ),
+                evidence_metric: "diff.total_growth_event_delta".to_owned(),
+                evidence_value: value,
+                threshold: 0,
+            });
+        }
+        ProfileReport { profiles }
+    }
+
     /// Return a human-readable artifact comparison report.
     pub fn report(&self) -> String {
         format!(
@@ -858,6 +1020,148 @@ impl ArtifactComparison {
             growth_events_added: self.diff.growth_events_added.len(),
         }
     }
+}
+
+fn profile_arena_report(report: &ArenaReport) -> ProfileReport {
+    let mut profiles = Vec::new();
+
+    if report.totals.total_growth_events == 0 {
+        profiles.push(MemoryProfile {
+            kind: MemoryProfileKind::Stable,
+            subject: report.arena_name.clone(),
+            reason: "total_growth_events is 0; Stable threshold is exactly 0 growth events"
+                .to_owned(),
+            evidence_metric: "totals.total_growth_events".to_owned(),
+            evidence_value: report.totals.total_growth_events,
+            threshold: 0,
+        });
+    }
+
+    let total_capacity_added: usize = report
+        .containers
+        .iter()
+        .map(|container| container.total_capacity_added)
+        .sum();
+    let average_growth_jump = if report.totals.total_growth_events == 0 {
+        0
+    } else {
+        total_capacity_added / report.totals.total_growth_events
+    };
+    if report.totals.total_growth_events >= FREQUENT_TINY_GROWTH_MIN_EVENTS
+        && average_growth_jump <= FREQUENT_TINY_GROWTH_MAX_AVERAGE_JUMP
+    {
+        profiles.push(MemoryProfile {
+            kind: MemoryProfileKind::FrequentTinyGrowth,
+            subject: report.arena_name.clone(),
+            reason: format!(
+                "{} growth events with average jump {average_growth_jump}; thresholds are at least {} events and average jump at most {}",
+                report.totals.total_growth_events,
+                FREQUENT_TINY_GROWTH_MIN_EVENTS,
+                FREQUENT_TINY_GROWTH_MAX_AVERAGE_JUMP
+            ),
+            evidence_metric: "average_growth_jump".to_owned(),
+            evidence_value: average_growth_jump,
+            threshold: FREQUENT_TINY_GROWTH_MAX_AVERAGE_JUMP,
+        });
+    }
+
+    if let Some(largest_event) = report
+        .growth_history
+        .iter()
+        .max_by(|left, right| left.capacity_added.cmp(&right.capacity_added))
+    {
+        if largest_event.capacity_added >= LARGE_SINGLE_JUMP_MIN_CAPACITY_ADDED {
+            profiles.push(MemoryProfile {
+                kind: MemoryProfileKind::LargeSingleJump,
+                subject: largest_event.container_name.clone(),
+                reason: format!(
+                    "largest observed growth jump added {}; threshold is at least {} capacity units",
+                    largest_event.capacity_added, LARGE_SINGLE_JUMP_MIN_CAPACITY_ADDED
+                ),
+                evidence_metric: "growth_history.capacity_added".to_owned(),
+                evidence_value: largest_event.capacity_added,
+                threshold: LARGE_SINGLE_JUMP_MIN_CAPACITY_ADDED,
+            });
+        }
+    }
+
+    if total_capacity_added >= BURST_GROWTH_MIN_TOTAL_CAPACITY_ADDED {
+        if let Some(top_container) = report
+            .containers
+            .iter()
+            .max_by(|left, right| left.total_capacity_added.cmp(&right.total_capacity_added))
+        {
+            let top_percent =
+                top_container.total_capacity_added.saturating_mul(100) / total_capacity_added;
+            if top_percent >= BURST_GROWTH_MIN_TOP_CONTAINER_PERCENT {
+                profiles.push(MemoryProfile {
+                    kind: MemoryProfileKind::BurstGrowth,
+                    subject: top_container.name.clone(),
+                    reason: format!(
+                        "container contributed {top_percent}% of total capacity added; threshold is at least {}% with total added at least {}",
+                        BURST_GROWTH_MIN_TOP_CONTAINER_PERCENT,
+                        BURST_GROWTH_MIN_TOTAL_CAPACITY_ADDED
+                    ),
+                    evidence_metric: "top_container_capacity_added_percent".to_owned(),
+                    evidence_value: top_percent,
+                    threshold: BURST_GROWTH_MIN_TOP_CONTAINER_PERCENT,
+                });
+            }
+        }
+    }
+
+    for container in &report.containers {
+        let over_reserved = if container.len == 0 {
+            container.current_capacity >= OVER_RESERVED_MIN_CAPACITY
+        } else {
+            container.current_capacity >= OVER_RESERVED_MIN_CAPACITY
+                && container.current_capacity
+                    >= container
+                        .len
+                        .saturating_mul(OVER_RESERVED_CAPACITY_TO_LEN_RATIO)
+        };
+        if over_reserved {
+            profiles.push(MemoryProfile {
+                kind: MemoryProfileKind::OverReserved,
+                subject: container.name.clone(),
+                reason: format!(
+                    "current capacity {} is at least {} and at least {}x len {}",
+                    container.current_capacity,
+                    OVER_RESERVED_MIN_CAPACITY,
+                    OVER_RESERVED_CAPACITY_TO_LEN_RATIO,
+                    container.len
+                ),
+                evidence_metric: "current_capacity".to_owned(),
+                evidence_value: container.current_capacity,
+                threshold: container
+                    .len
+                    .saturating_mul(OVER_RESERVED_CAPACITY_TO_LEN_RATIO)
+                    .max(OVER_RESERVED_MIN_CAPACITY),
+            });
+        }
+
+        if container.growth_events >= UNDER_RESERVED_MIN_GROWTH_EVENTS && container.len > 0 {
+            let len_per_growth_event = container.len / container.growth_events;
+            if len_per_growth_event <= UNDER_RESERVED_MAX_LEN_PER_GROWTH_EVENT {
+                profiles.push(MemoryProfile {
+                    kind: MemoryProfileKind::UnderReserved,
+                    subject: container.name.clone(),
+                    reason: format!(
+                        "{} growth events for len {}; len per growth event {len_per_growth_event}; thresholds are at least {} growth events and at most {} len per event",
+                        container.growth_events,
+                        container.len,
+                        UNDER_RESERVED_MIN_GROWTH_EVENTS,
+                        UNDER_RESERVED_MAX_LEN_PER_GROWTH_EVENT
+                    ),
+                    evidence_metric: "len_per_growth_event".to_owned(),
+                    evidence_value: len_per_growth_event,
+                    threshold: UNDER_RESERVED_MAX_LEN_PER_GROWTH_EVENT,
+                });
+            }
+        }
+    }
+
+    ProfileReport { profiles }
 }
 
 impl ArenaReport {
@@ -941,6 +1245,21 @@ impl ArenaReport {
             passed: violations.is_empty(),
             violations,
         }
+    }
+
+    /// Classify this arena report into deterministic evidence-derived memory profiles.
+    ///
+    /// Thresholds are fixed and explicit: `Stable` requires zero growth events;
+    /// `FrequentTinyGrowth` requires at least 8 growth events and an integer
+    /// average jump no greater than 4 capacity units; `LargeSingleJump`
+    /// requires one jump of at least 1024 capacity units; `BurstGrowth`
+    /// requires at least 16 total capacity units added and the largest
+    /// container contributor to hold at least 80 percent of added capacity;
+    /// `OverReserved` requires capacity of at least 16 and at least 4x len;
+    /// `UnderReserved` requires at least 8 growth events and no more than 4
+    /// logical length units per growth event.
+    pub fn profile(&self) -> ProfileReport {
+        profile_arena_report(self)
     }
 
     /// Return a compact summary derived from this report's raw growth history.
@@ -1301,6 +1620,29 @@ impl BudgetReport {
         self.to_string()
     }
 
+    /// Classify failed budget violations as deterministic budget-risk profiles.
+    pub fn profile(&self) -> ProfileReport {
+        let profiles = self
+            .violations
+            .iter()
+            .map(|violation| MemoryProfile {
+                kind: MemoryProfileKind::BudgetRisk,
+                subject: match &violation.container_name {
+                    Some(container_name) => format!("{} {container_name}", violation.scope),
+                    None => violation.scope.clone(),
+                },
+                reason: format!(
+                    "budget metric {} observed {} exceeded limit {} by {}",
+                    violation.metric, violation.observed, violation.limit, violation.exceeded_by
+                ),
+                evidence_metric: violation.metric.clone(),
+                evidence_value: violation.observed,
+                threshold: violation.limit,
+            })
+            .collect();
+        ProfileReport { profiles }
+    }
+
     /// Export typed budget violation evidence as CSV.
     pub fn violations_csv(&self) -> String {
         let mut csv = String::from("scope,container_name,metric,observed,limit,exceeded_by\n");
@@ -1389,6 +1731,26 @@ impl RegressionReport {
     /// Return a human-readable memory regression report.
     pub fn report(&self) -> String {
         self.to_string()
+    }
+
+    /// Classify failed regression evidence as deterministic regression-risk profiles.
+    pub fn profile(&self) -> ProfileReport {
+        let profiles = self
+            .regressions
+            .iter()
+            .map(|regression| MemoryProfile {
+                kind: MemoryProfileKind::RegressionRisk,
+                subject: regression.container_name.clone(),
+                reason: format!(
+                    "regression metric {} delta {} exceeded allowed delta {}",
+                    regression.metric, regression.delta, regression.allowed_delta
+                ),
+                evidence_metric: regression.metric.clone(),
+                evidence_value: regression.delta,
+                threshold: regression.allowed_delta,
+            })
+            .collect();
+        ProfileReport { profiles }
     }
 
     /// Export typed regression failure evidence as CSV.
