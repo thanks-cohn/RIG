@@ -252,6 +252,14 @@ RIG does not write files automatically. Persistence is 100% opt-in: default repo
 
 `Arena::write_json(path)` writes the current pretty JSON report only when the programmer explicitly calls it. `Arena::load_report(path)` loads a persisted report back into an `ArenaReport`, so allocation/growth evidence can survive the process for later inspection.
 
+## Report artifacts
+
+RIG reports can be written as explicit JSON artifacts with `ArenaReport::write_artifact(path)`. The caller chooses the path, and RIG writes only that requested JSON file. Saved artifacts can be loaded later with `ReportArtifact::load(path)`, preserving the exact `ArenaReport` evidence that was written.
+
+Loaded artifacts can be compared with `baseline_artifact.compare_to(&current_artifact)`. The resulting `ArtifactComparison` derives its `ArenaDiff` from the saved baseline and current reports, can print human evidence with `report()`, and can print compact JSON evidence with `report_json()`. Regression gates and memory budgets can also be run from saved evidence with `ArtifactComparison::regression_report(&RegressionBudget)` and `ArtifactComparison::budget_report(&MemoryBudget)`.
+
+RIG does not automatically persist reports, does not create hidden files, and does not create hidden directories. Artifact persistence remains useful for CI pipelines, classrooms, reproducible memory audits, release validation, and before/after comparisons because every comparison and gate is based on explicit saved report evidence.
+
 ---
 
 ## Path to v1

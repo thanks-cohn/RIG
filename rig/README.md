@@ -125,7 +125,7 @@ RIG does not write files automatically. Default RIG behavior remains fully in-me
 
 Persistence is opt-in. The only time RIG writes a report to disk is when the programmer explicitly calls `Arena::write_json(path)`. `Arena::write_json(path)` creates or overwrites the target report file with pretty JSON and returns real `std::io::Result<()>` filesystem errors.
 
-`Arena::load_report(path)` reads a report back from disk into an `ArenaReport`. It returns a typed `LoadReportError` that distinguishes filesystem IO failures from JSON deserialization failures. This lets reports survive the process for later inspection without adding automatic file generation or hidden runtime behavior.
+`Arena::load_report(path)` reads a report back from disk into an `ArenaReport`. It returns a typed `RigIoError` (also available as `LoadReportError` for compatibility) that distinguishes filesystem IO failures from JSON deserialization failures. This lets reports survive the process for later inspection without adding automatic file generation or hidden runtime behavior.
 
 ```rust
 let path = std::env::temp_dir().join("rig-report.json");
@@ -133,6 +133,14 @@ arena.write_json(&path)?;
 let loaded = Arena::load_report(&path)?;
 assert_eq!(loaded, arena.snapshot());
 ```
+
+## Report artifacts
+
+RIG reports can be written as explicit JSON artifacts with `ArenaReport::write_artifact(path)`. The caller chooses the path, and RIG writes only that requested JSON file. Saved artifacts can be loaded later with `ReportArtifact::load(path)`, preserving the exact `ArenaReport` evidence that was written.
+
+Loaded artifacts can be compared with `baseline_artifact.compare_to(&current_artifact)`. The resulting `ArtifactComparison` derives its `ArenaDiff` from the saved baseline and current reports, can print human evidence with `report()`, and can print compact JSON evidence with `report_json()`. Regression gates and memory budgets can also be run from saved evidence with `ArtifactComparison::regression_report(&RegressionBudget)` and `ArtifactComparison::budget_report(&MemoryBudget)`.
+
+RIG does not automatically persist reports, does not create hidden files, and does not create hidden directories. Artifact persistence remains useful for CI pipelines, classrooms, reproducible memory audits, release validation, and before/after comparisons because every comparison and gate is based on explicit saved report evidence.
 
 ## Path to v1
 
