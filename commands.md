@@ -210,3 +210,9 @@ cargo run --example evidence_profiles
 cargo test profile
 # Run evidence profile tests.
 
+
+cargo run --example workload_contract
+# Run workload contract example.
+
+cargo test contract
+# Run workload contract tests.
