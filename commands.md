@@ -203,3 +203,10 @@ cargo run --example evidence_exports
 
 cargo test export
 # Run evidence export tests.
+
+cargo run --example evidence_profiles
+# Run evidence profile example.
+
+cargo test profile
+# Run evidence profile tests.
+

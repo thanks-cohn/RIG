@@ -336,6 +336,22 @@ Budget checks are performed from `ArenaReport::check_budget(&budget)`. They use 
 Memory budgets are useful for schools, CI gates, benchmark discipline, production sanity checks, and memory-aware assignments because they answer whether a workload stayed inside its allowed memory behavior.
 
 Budget checks are in-memory operations and do not write files automatically. `BudgetReport` and `BudgetViolation` provide typed results, and `BudgetReport::report_json()` supports JSON round-trip through `serde_json`.
+
+## Evidence profiles
+
+RIG can classify observed memory behavior patterns into evidence profiles that answer: "What pattern does this workload show?" The public profile kinds are `Stable`, `BurstGrowth`, `FrequentTinyGrowth`, `LargeSingleJump`, `OverReserved`, `UnderReserved`, `BudgetRisk`, and `RegressionRisk`.
+
+Profiles are deterministic and evidence-derived. Each `MemoryProfile` records the profile kind, subject, reason, evidence metric, evidence value, and threshold. Profile detection uses fixed thresholds documented in `ArenaReport::profile()`: zero growth events for `Stable`, at least 8 growth events with average jump at most 4 for `FrequentTinyGrowth`, a growth jump of at least 1024 for `LargeSingleJump`, at least 80 percent of capacity growth concentrated in one container with at least 16 total capacity added for `BurstGrowth`, capacity at least 16 and at least 4x length for `OverReserved`, and at least 8 growth events with at most 4 length units per growth event for `UnderReserved`.
+
+Profiles are not guesses. They are derived only from real `ArenaReport`, `ContainerReport`, `GrowthEvent`, `BudgetReport`, `RegressionReport`, and artifact-comparison evidence. Budget failures produce `BudgetRisk`; regression failures and positive artifact comparison growth deltas produce `RegressionRisk`. `ProfileReport::report()` returns a human-readable profile report, `ProfileReport::report_json()` returns in-memory JSON, and `profiles_by_kind(kind)` filters typed profile evidence.
+
+Evidence profiles are useful for students, CI, audits, and human review because they turn raw memory evidence into deterministic behavior labels without AI, fuzzy scoring, hidden files, automatic persistence, or invented metrics.
+
+```rust
+let profile = arena.snapshot().profile();
+println!("{}", profile.report());
+println!("{}", profile.report_json());
+```
 ## Evidence exports
 
 RIG evidence can be exported to CSV or JSON Lines when a caller explicitly asks for it. Container summaries, growth history, growth attributions, budget violations, regression failures, and artifact comparison summaries are available as in-memory strings, and the same explicit export values can be written to caller-provided file paths.
