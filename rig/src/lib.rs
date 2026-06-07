@@ -152,6 +152,211 @@ pub struct EvidenceExport {
     pub contents: String,
 }
 
+/// Deterministic non-cryptographic identifier for serialized RIG evidence.
+///
+/// RIG uses FNV-1a 64-bit with standard-library code only. This fingerprint is
+/// intended for stable evidence identity and audit comparison; it is not a
+/// cryptographic hash, signature, or tamper-proof proof.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EvidenceFingerprint {
+    /// Fingerprint algorithm name.
+    pub algorithm: String,
+    /// Lowercase hexadecimal fingerprint value.
+    pub value: String,
+}
+
+impl EvidenceFingerprint {
+    fn fnv1a64(bytes: &[u8]) -> Self {
+        const FNV_OFFSET_BASIS: u64 = 0xcbf29ce484222325;
+        const FNV_PRIME: u64 = 0x00000100000001b3;
+
+        let mut hash = FNV_OFFSET_BASIS;
+        for byte in bytes {
+            hash ^= u64::from(*byte);
+            hash = hash.wrapping_mul(FNV_PRIME);
+        }
+
+        Self {
+            algorithm: "fnv1a64".to_owned(),
+            value: format!("{hash:016x}"),
+        }
+    }
+}
+
+impl fmt::Display for EvidenceFingerprint {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{}:{}", self.algorithm, self.value)
+    }
+}
+
+/// Caller-supplied subject metadata for an evidence certificate.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CertificationSubject {
+    /// Workload name being certified.
+    pub workload_name: String,
+    /// Optional caller-supplied workload description.
+    pub description: String,
+}
+
+impl CertificationSubject {
+    /// Create a certification subject for the named workload.
+    pub fn new(workload_name: impl Into<String>) -> Self {
+        Self {
+            workload_name: workload_name.into(),
+            description: String::new(),
+        }
+    }
+
+    /// Set a human-readable description for this certification subject.
+    pub fn with_description(mut self, description: impl Into<String>) -> Self {
+        self.description = description.into();
+        self
+    }
+}
+
+/// Durable, serializable pass/fail proof derived from observed RIG evidence and explicit caller input.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EvidenceCertificate {
+    /// Workload that was evaluated.
+    pub subject: CertificationSubject,
+    /// Whether the evaluated evidence passed the applied gate, if any.
+    pub passed: bool,
+    /// Deterministic fingerprint of this certificate's evidence summary.
+    pub evidence_fingerprint: EvidenceFingerprint,
+    /// Deterministic fingerprint of the source report evidence.
+    pub report_fingerprint: EvidenceFingerprint,
+    /// Contract name when a workload contract was evaluated.
+    pub contract_name: Option<String>,
+    /// Total contract violation count.
+    pub violation_count: usize,
+    /// Budget violation count from observed budget evidence.
+    pub budget_violation_count: usize,
+    /// Regression violation count from observed regression evidence.
+    pub regression_violation_count: usize,
+    /// Number of memory profiles observed in report evidence.
+    pub profile_count: usize,
+    /// Human-readable summary of the evidence used for certification.
+    pub summary: String,
+}
+
+impl EvidenceCertificate {
+    /// Return a human-readable evidence certificate report.
+    pub fn report(&self) -> String {
+        self.to_string()
+    }
+
+    /// Serialize this certificate as pretty JSON.
+    ///
+    /// This is an in-memory operation and does not write files.
+    pub fn report_json(&self) -> String {
+        serde_json::to_string_pretty(self)
+            .expect("serializing an EvidenceCertificate should not fail")
+    }
+
+    /// Return this certificate's deterministic evidence fingerprint.
+    pub fn fingerprint(&self) -> EvidenceFingerprint {
+        self.evidence_fingerprint.clone()
+    }
+}
+
+impl fmt::Display for EvidenceCertificate {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(formatter, "RIG evidence certificate")?;
+        writeln!(formatter, "Subject: {}", self.subject.workload_name)?;
+        writeln!(
+            formatter,
+            "Status: {}",
+            if self.passed { "PASSED" } else { "FAILED" }
+        )?;
+        writeln!(
+            formatter,
+            "Evidence fingerprint: {}",
+            self.evidence_fingerprint
+        )?;
+        writeln!(formatter, "Report fingerprint: {}", self.report_fingerprint)?;
+        writeln!(
+            formatter,
+            "Contract: {}",
+            self.contract_name.as_deref().unwrap_or("(none)")
+        )?;
+        writeln!(formatter, "Violations: {}", self.violation_count)?;
+        writeln!(
+            formatter,
+            "Budget violations: {}",
+            self.budget_violation_count
+        )?;
+        writeln!(
+            formatter,
+            "Regression violations: {}",
+            self.regression_violation_count
+        )?;
+        writeln!(formatter, "Profiles observed: {}", self.profile_count)?;
+        writeln!(formatter)?;
+        writeln!(formatter, "Summary:")?;
+        writeln!(formatter)?;
+        write!(formatter, "{}", self.summary)
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct CertificateFingerprintEvidence<'a> {
+    subject: &'a CertificationSubject,
+    passed: bool,
+    report_fingerprint: &'a EvidenceFingerprint,
+    contract_name: &'a Option<String>,
+    violation_count: usize,
+    budget_violation_count: usize,
+    regression_violation_count: usize,
+    profile_count: usize,
+    summary: &'a str,
+}
+
+fn fingerprint_serializable<T: Serialize>(value: &T) -> EvidenceFingerprint {
+    let json =
+        serde_json::to_string(value).expect("serializing fingerprint evidence should not fail");
+    EvidenceFingerprint::fnv1a64(json.as_bytes())
+}
+
+struct CertificateDraft {
+    subject: CertificationSubject,
+    passed: bool,
+    report_fingerprint: EvidenceFingerprint,
+    contract_name: Option<String>,
+    violation_count: usize,
+    budget_violation_count: usize,
+    regression_violation_count: usize,
+    profile_count: usize,
+    summary: String,
+}
+
+fn build_certificate(draft: CertificateDraft) -> EvidenceCertificate {
+    let evidence = CertificateFingerprintEvidence {
+        subject: &draft.subject,
+        passed: draft.passed,
+        report_fingerprint: &draft.report_fingerprint,
+        contract_name: &draft.contract_name,
+        violation_count: draft.violation_count,
+        budget_violation_count: draft.budget_violation_count,
+        regression_violation_count: draft.regression_violation_count,
+        profile_count: draft.profile_count,
+        summary: &draft.summary,
+    };
+    let evidence_fingerprint = fingerprint_serializable(&evidence);
+
+    EvidenceCertificate {
+        subject: draft.subject,
+        passed: draft.passed,
+        evidence_fingerprint,
+        report_fingerprint: draft.report_fingerprint,
+        contract_name: draft.contract_name,
+        violation_count: draft.violation_count,
+        budget_violation_count: draft.budget_violation_count,
+        regression_violation_count: draft.regression_violation_count,
+        profile_count: draft.profile_count,
+        summary: draft.summary,
+    }
+}
+
 /// Capacity reservation strategy used by tracked RIG containers before growth.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GrowthPolicy {
@@ -474,6 +679,11 @@ pub struct ProfileReport {
 }
 
 impl ProfileReport {
+    /// Return a deterministic non-cryptographic fingerprint of this profile report.
+    pub fn fingerprint(&self) -> EvidenceFingerprint {
+        fingerprint_serializable(self)
+    }
+
     /// Return a human-readable evidence profile report.
     pub fn report(&self) -> String {
         self.to_string()
@@ -720,6 +930,51 @@ impl WorkloadContract {
 }
 
 impl ContractReport {
+    /// Return a deterministic non-cryptographic fingerprint of this contract report.
+    pub fn fingerprint(&self) -> EvidenceFingerprint {
+        fingerprint_serializable(self)
+    }
+
+    /// Certify this contract report as a durable pass/fail proof.
+    pub fn certify(&self, subject: CertificationSubject) -> EvidenceCertificate {
+        let budget_violation_count = self
+            .budget_report
+            .as_ref()
+            .map(|report| report.violations.len())
+            .unwrap_or(0);
+        let regression_violation_count = self
+            .regression_report
+            .as_ref()
+            .map(|report| report.regressions.len())
+            .unwrap_or(0);
+        let profile_count = self
+            .profile_report
+            .as_ref()
+            .map(|report| report.profiles.len())
+            .unwrap_or(0);
+        let summary = format!(
+            "Contract {} evaluated with status {}; {} contract violations, {} budget violations, {} regression violations, and {} profiles observed from included report evidence.",
+            self.contract_name,
+            if self.passed { "PASSED" } else { "FAILED" },
+            self.violations.len(),
+            budget_violation_count,
+            regression_violation_count,
+            profile_count
+        );
+
+        build_certificate(CertificateDraft {
+            subject,
+            passed: self.passed,
+            report_fingerprint: self.fingerprint(),
+            contract_name: Some(self.contract_name.clone()),
+            violation_count: self.violations.len(),
+            budget_violation_count,
+            regression_violation_count,
+            profile_count,
+            summary,
+        })
+    }
+
     /// Return a human-readable workload contract report.
     pub fn report(&self) -> String {
         self.to_string()
@@ -1044,6 +1299,92 @@ impl ReportArtifact {
 }
 
 impl ArtifactComparison {
+    /// Return a deterministic non-cryptographic fingerprint of this artifact comparison.
+    pub fn fingerprint(&self) -> EvidenceFingerprint {
+        fingerprint_serializable(&ArtifactComparisonJson {
+            baseline_path: &self.baseline_path,
+            current_path: &self.current_path,
+            baseline_arena_name: &self.baseline.arena_name,
+            current_arena_name: &self.current.arena_name,
+            diff: &self.diff,
+        })
+    }
+
+    /// Certify this artifact comparison, optionally including an evaluated contract report.
+    pub fn certify(
+        &self,
+        subject: CertificationSubject,
+        contract_report: Option<&ContractReport>,
+    ) -> EvidenceCertificate {
+        let comparison_fingerprint = self.fingerprint();
+        let profile_count = self.profile().profiles.len();
+
+        let (
+            passed,
+            contract_name,
+            violation_count,
+            budget_violation_count,
+            regression_violation_count,
+            summary,
+        ) = if let Some(contract_report) = contract_report {
+            let budget_violation_count = contract_report
+                .budget_report
+                .as_ref()
+                .map(|report| report.violations.len())
+                .unwrap_or(0);
+            let regression_violation_count = contract_report
+                .regression_report
+                .as_ref()
+                .map(|report| report.regressions.len())
+                .unwrap_or(0);
+            (
+                contract_report.passed,
+                Some(contract_report.contract_name.clone()),
+                contract_report.violations.len(),
+                budget_violation_count,
+                regression_violation_count,
+                format!(
+                    "Artifact comparison evaluated baseline {} against current {}; contract {} was evaluated with status {}; diff capacity delta {}, growth-event delta {}, and operation delta {}.",
+                    self.baseline_path.display(),
+                    self.current_path.display(),
+                    contract_report.contract_name,
+                    if contract_report.passed { "PASSED" } else { "FAILED" },
+                    self.diff.total_capacity_delta,
+                    self.diff.total_growth_event_delta,
+                    self.diff.total_operation_delta
+                ),
+            )
+        } else {
+            (
+                true,
+                None,
+                0,
+                0,
+                0,
+                format!(
+                    "Artifact comparison evidence exists for baseline {} against current {}; no contract was evaluated, so no gate result is claimed; diff capacity delta {}, growth-event delta {}, and operation delta {}.",
+                    self.baseline_path.display(),
+                    self.current_path.display(),
+                    self.diff.total_capacity_delta,
+                    self.diff.total_growth_event_delta,
+                    self.diff.total_operation_delta
+                ),
+            )
+        };
+
+        build_certificate(CertificateDraft {
+            subject,
+            passed,
+            report_fingerprint: comparison_fingerprint,
+            contract_name,
+            violation_count,
+            budget_violation_count,
+            regression_violation_count,
+            profile_count,
+            summary,
+        })
+    }
+
     /// Run memory regression gates using the current artifact report against the baseline artifact report.
     pub fn regression_report(&self, budget: &RegressionBudget) -> RegressionReport {
         self.current
@@ -1322,6 +1663,35 @@ fn profile_arena_report(report: &ArenaReport) -> ProfileReport {
 }
 
 impl ArenaReport {
+    /// Return a deterministic non-cryptographic fingerprint of this arena report.
+    pub fn fingerprint(&self) -> EvidenceFingerprint {
+        fingerprint_serializable(self)
+    }
+
+    /// Certify this arena report without applying a gate.
+    pub fn certify(&self, subject: CertificationSubject) -> EvidenceCertificate {
+        let profile_count = self.profile().profiles.len();
+        let summary = format!(
+            "Arena {} observed {} containers, total capacity {}, and {} total growth events.",
+            self.arena_name,
+            self.tracked_container_count,
+            self.totals.total_current_capacity,
+            self.totals.total_growth_events
+        );
+
+        build_certificate(CertificateDraft {
+            subject,
+            passed: true,
+            report_fingerprint: self.fingerprint(),
+            contract_name: None,
+            violation_count: 0,
+            budget_violation_count: 0,
+            regression_violation_count: 0,
+            profile_count,
+            summary,
+        })
+    }
+
     /// Check this report against an explicit workload contract.
     ///
     /// Budget and profile rules use only values already present in this
@@ -1781,6 +2151,11 @@ impl ContainerDiff {
 }
 
 impl BudgetReport {
+    /// Return a deterministic non-cryptographic fingerprint of this budget report.
+    pub fn fingerprint(&self) -> EvidenceFingerprint {
+        fingerprint_serializable(self)
+    }
+
     /// Serialize this budget report as pretty JSON.
     ///
     /// This is an in-memory operation and does not write files.
@@ -1894,6 +2269,11 @@ impl fmt::Display for BudgetReport {
 }
 
 impl RegressionReport {
+    /// Return a deterministic non-cryptographic fingerprint of this regression report.
+    pub fn fingerprint(&self) -> EvidenceFingerprint {
+        fingerprint_serializable(self)
+    }
+
     /// Serialize this regression report as pretty JSON.
     ///
     /// This is an in-memory operation and does not write files.

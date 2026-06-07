@@ -451,3 +451,21 @@ RIG is being hardened toward v1 as an explicit, evidence-based library rather th
 RIG does not create hidden project state, does not run background services, does not start daemons, and does not persist evidence automatically. Snapshots, reports, diffs, budgets, profiles, contracts, and exports are in-memory evidence until the caller explicitly chooses a write method and provides a path.
 
 The v1 path is focused on API stability, clear errors, abuse resistance, and documentation clarity. RIG should remain boring under pressure: unusual names, empty reports, missing files, invalid JSON, repeated explicit writes, and empty evidence should produce deterministic behavior rather than magic side effects.
+
+## Evidence certification
+
+RIG can produce deterministic evidence certificates: typed, serializable proof objects that summarize a workload subject, the observed report evidence used, any applied contract or budget result, pass/fail status, violation counts, profile counts, and deterministic evidence fingerprints.
+
+Certificates are useful for CI release gates, classroom grading, game levels, benchmarks, artifact review, and release audits because they turn observed RIG reports into durable pass/fail evidence without introducing hidden state.
+
+Fingerprints use deterministic evidence serialization and the built-in `fnv1a64` identifier. They are stable identifiers for comparing evidence; they are not cryptographic hashes, signatures, tamper-proof seals, or blockchain records.
+
+Evidence certification does not write files automatically, does not create hidden files, and does not persist anything unless the caller explicitly invokes an existing write API elsewhere. Certificate fields are derived from observed RIG evidence or explicit caller input.
+
+```rust
+let subject = rig::CertificationSubject::new("level-1");
+let certificate = arena.snapshot().certify(subject);
+assert!(certificate.passed);
+println!("{}", certificate.report());
+println!("{}", certificate.report_json());
+```

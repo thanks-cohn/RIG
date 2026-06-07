@@ -227,3 +227,11 @@ cargo run --example workload_contract
 
 cargo test contract
 # Run workload contract tests.
+
+cargo run --example evidence_certificate
+
+# Run evidence certificate example.
+
+cargo test certificate
+
+# Run evidence certificate tests.
