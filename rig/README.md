@@ -336,3 +336,9 @@ Budget checks are performed from `ArenaReport::check_budget(&budget)`. They use 
 Memory budgets are useful for schools, CI gates, benchmark discipline, production sanity checks, and memory-aware assignments because they answer whether a workload stayed inside its allowed memory behavior.
 
 Budget checks are in-memory operations and do not write files automatically. `BudgetReport` and `BudgetViolation` provide typed results, and `BudgetReport::report_json()` supports JSON round-trip through `serde_json`.
+## Evidence exports
+
+RIG evidence can be exported to CSV or JSON Lines when a caller explicitly asks for it. Container summaries, growth history, growth attributions, budget violations, regression failures, and artifact comparison summaries are available as in-memory strings, and the same explicit export values can be written to caller-provided file paths.
+
+These exports are useful for classrooms, CI artifacts, spreadsheets, grading scripts, report viewers, release validation, and reproducible memory audits outside Rust. Exported values come from observed RIG evidence already present in reports; RIG does not invent metrics, estimate capacities, automatically persist exports, or create hidden files.
+
