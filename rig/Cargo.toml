@@ -1,6 +1,6 @@
 [package]
 name = "rig"
-version = "0.18.0"
+version = "0.19.0"
 edition = "2021"
 description = "Visible allocation and growth tracking for Rust containers."
 license = "MIT OR Apache-2.0"

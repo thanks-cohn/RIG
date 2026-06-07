@@ -374,3 +374,21 @@ RIG can validate explicit memory behavior contracts for named workloads. A `Work
 Workload contracts are useful for CI gates, classroom grading, game-level validation, benchmark discipline, release certification, and reproducible audits because every `ContractReport` is derived from observed RIG evidence such as `ArenaReport`, `BudgetReport`, `RegressionReport`, `ProfileReport`, and `ArtifactComparison` data.
 
 Contract reports are typed, can be rendered as human-readable text, and JSON round-trip through `serde_json`. Contracts use observed evidence only: RIG does not add fake metrics, estimate capacity, infer missing rules, write files automatically, create hidden files, or persist anything unless the caller explicitly chooses a persistence API elsewhere.
+
+## Evidence certification
+
+RIG can produce deterministic evidence certificates: typed, serializable proof objects that summarize a workload subject, the observed report evidence used, any applied contract or budget result, pass/fail status, violation counts, profile counts, and deterministic evidence fingerprints.
+
+Certificates are useful for CI release gates, classroom grading, game levels, benchmarks, artifact review, and release audits because they turn observed RIG reports into durable pass/fail evidence without introducing hidden state.
+
+Fingerprints use deterministic evidence serialization and the built-in `fnv1a64` identifier. They are stable identifiers for comparing evidence; they are not cryptographic hashes, signatures, tamper-proof seals, or blockchain records.
+
+Evidence certification does not write files automatically, does not create hidden files, and does not persist anything unless the caller explicitly invokes an existing write API elsewhere. Certificate fields are derived from observed RIG evidence or explicit caller input.
+
+```rust
+let subject = rig::CertificationSubject::new("level-1");
+let certificate = arena.snapshot().certify(subject);
+assert!(certificate.passed);
+println!("{}", certificate.report());
+println!("{}", certificate.report_json());
+```
