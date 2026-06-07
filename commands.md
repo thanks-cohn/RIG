@@ -198,3 +198,8 @@ cargo test artifact
 
 # Run report artifact tests.
 
+cargo run --example evidence_exports
+# Run evidence export example.
+
+cargo test export
+# Run evidence export tests.

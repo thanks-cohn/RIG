@@ -132,6 +132,26 @@ impl ContainerKind {
     }
 }
 
+/// Explicit export encoding for portable RIG evidence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExportFormat {
+    /// Comma-separated values with a header row.
+    Csv,
+    /// Newline-delimited JSON with one JSON object per line.
+    JsonLines,
+}
+
+/// Explicit caller-requested evidence export.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EvidenceExport {
+    /// Encoding used by this export.
+    pub format: ExportFormat,
+    /// Stable evidence category name for this export.
+    pub kind: String,
+    /// Exact exported bytes represented as UTF-8 text.
+    pub contents: String,
+}
+
 /// Capacity reservation strategy used by tracked RIG containers before growth.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GrowthPolicy {
@@ -223,6 +243,17 @@ impl fmt::Display for RigError {
 }
 
 impl Error for RigError {}
+
+impl EvidenceExport {
+    /// Write exactly this export's contents to an explicit caller-provided path.
+    ///
+    /// This method does not create missing parent directories and does not
+    /// create hidden files unless the caller's path itself names a hidden file.
+    pub fn write_to<P: AsRef<Path>>(&self, path: P) -> Result<(), RigIoError> {
+        fs::write(path, &self.contents)?;
+        Ok(())
+    }
+}
 
 /// One observed live capacity-growth event for a tracked container.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -407,6 +438,45 @@ struct ArtifactComparisonJson<'a> {
     baseline_arena_name: &'a str,
     current_arena_name: &'a str,
     diff: &'a ArenaDiff,
+}
+
+#[derive(Debug, Serialize)]
+struct ArtifactComparisonSummary<'a> {
+    baseline_path: String,
+    current_path: String,
+    baseline_arena_name: &'a str,
+    current_arena_name: &'a str,
+    total_len_delta: i64,
+    total_capacity_delta: i64,
+    total_growth_event_delta: i64,
+    total_operation_delta: i64,
+    containers_added: usize,
+    containers_removed: usize,
+    containers_changed: usize,
+    growth_events_added: usize,
+}
+
+impl ArtifactComparisonSummary<'_> {
+    fn csv_header() -> &'static str {
+        "baseline_path,current_path,baseline_arena_name,current_arena_name,total_len_delta,total_capacity_delta,total_growth_event_delta,total_operation_delta,containers_added,containers_removed,containers_changed,growth_events_added\n"
+    }
+
+    fn csv_row(&self) -> String {
+        csv_record([
+            self.baseline_path.clone(),
+            self.current_path.clone(),
+            self.baseline_arena_name.to_owned(),
+            self.current_arena_name.to_owned(),
+            self.total_len_delta.to_string(),
+            self.total_capacity_delta.to_string(),
+            self.total_growth_event_delta.to_string(),
+            self.total_operation_delta.to_string(),
+            self.containers_added.to_string(),
+            self.containers_removed.to_string(),
+            self.containers_changed.to_string(),
+            self.growth_events_added.to_string(),
+        ])
+    }
 }
 
 /// Explicit memory behavior budget checked against one observed [`ArenaReport`].
@@ -746,6 +816,48 @@ impl ArtifactComparison {
         serde_json::to_string_pretty(&evidence)
             .expect("serializing an ArtifactComparison should not fail")
     }
+
+    /// Export artifact comparison summary evidence as CSV.
+    pub fn summary_csv(&self) -> String {
+        let mut csv = String::from(ArtifactComparisonSummary::csv_header());
+        csv.push_str(&self.summary_evidence().csv_row());
+        csv.push('\n');
+        csv
+    }
+
+    /// Export artifact comparison summary evidence as JSON Lines.
+    pub fn summary_jsonl(&self) -> String {
+        jsonl_lines(std::iter::once(self.summary_evidence()))
+    }
+
+    /// Export artifact comparison summary evidence in the requested format.
+    pub fn export_summary(&self, format: ExportFormat) -> EvidenceExport {
+        EvidenceExport {
+            format,
+            kind: "artifact_comparison_summary".to_owned(),
+            contents: match format {
+                ExportFormat::Csv => self.summary_csv(),
+                ExportFormat::JsonLines => self.summary_jsonl(),
+            },
+        }
+    }
+
+    fn summary_evidence(&self) -> ArtifactComparisonSummary<'_> {
+        ArtifactComparisonSummary {
+            baseline_path: self.baseline_path.display().to_string(),
+            current_path: self.current_path.display().to_string(),
+            baseline_arena_name: &self.baseline.arena_name,
+            current_arena_name: &self.current.arena_name,
+            total_len_delta: self.diff.total_len_delta,
+            total_capacity_delta: self.diff.total_capacity_delta,
+            total_growth_event_delta: self.diff.total_growth_event_delta,
+            total_operation_delta: self.diff.total_operation_delta,
+            containers_added: self.diff.containers_added.len(),
+            containers_removed: self.diff.containers_removed.len(),
+            containers_changed: self.diff.containers_changed.len(),
+            growth_events_added: self.diff.growth_events_added.len(),
+        }
+    }
 }
 
 impl ArenaReport {
@@ -885,6 +997,107 @@ impl ArenaReport {
     /// ```
     pub fn report_json(&self) -> String {
         serde_json::to_string_pretty(self).expect("serializing an ArenaReport should not fail")
+    }
+
+    /// Export per-container summary evidence as CSV.
+    pub fn containers_csv(&self) -> String {
+        let mut csv = String::from("name,kind,len,initial_capacity,growth_policy,current_capacity,growth_events,total_capacity_added,largest_growth_jump,average_growth_jump,operation_label,total_operations,extra_metric_label,extra_metric_value\n");
+        for container in &self.containers {
+            csv.push_str(&csv_record([
+                container.name.clone(),
+                container.kind.clone(),
+                container.len.to_string(),
+                container.initial_capacity.to_string(),
+                container.growth_policy.clone(),
+                container.current_capacity.to_string(),
+                container.growth_events.to_string(),
+                container.total_capacity_added.to_string(),
+                container.largest_growth_jump.to_string(),
+                container.average_growth_jump.to_string(),
+                container.operation_label.clone(),
+                container.total_operations.to_string(),
+                container.extra_metric_label.clone().unwrap_or_default(),
+                container
+                    .extra_metric_value
+                    .map(|value| value.to_string())
+                    .unwrap_or_default(),
+            ]));
+            csv.push('\n');
+        }
+        csv
+    }
+
+    /// Export raw growth history evidence as CSV.
+    pub fn growth_history_csv(&self) -> String {
+        growth_events_csv(&self.growth_history)
+    }
+
+    /// Export growth attribution evidence as CSV.
+    pub fn growth_attributions_csv(&self) -> String {
+        let mut csv = String::from("container_name,operation_index,old_capacity,new_capacity,capacity_added,growth_policy\n");
+        for attribution in &self.growth_attributions {
+            csv.push_str(&csv_record([
+                attribution.container_name.clone(),
+                attribution.operation_index.to_string(),
+                attribution.old_capacity.to_string(),
+                attribution.new_capacity.to_string(),
+                attribution.capacity_added.to_string(),
+                attribution.growth_policy.clone(),
+            ]));
+            csv.push('\n');
+        }
+        csv
+    }
+
+    /// Export per-container summary evidence as JSON Lines.
+    pub fn containers_jsonl(&self) -> String {
+        jsonl_lines(self.containers.iter())
+    }
+
+    /// Export raw growth history evidence as JSON Lines.
+    pub fn growth_history_jsonl(&self) -> String {
+        jsonl_lines(self.growth_history.iter())
+    }
+
+    /// Export growth attribution evidence as JSON Lines.
+    pub fn growth_attributions_jsonl(&self) -> String {
+        jsonl_lines(self.growth_attributions.iter())
+    }
+
+    /// Export per-container summary evidence in the requested format.
+    pub fn export_containers(&self, format: ExportFormat) -> EvidenceExport {
+        EvidenceExport {
+            format,
+            kind: "containers".to_owned(),
+            contents: match format {
+                ExportFormat::Csv => self.containers_csv(),
+                ExportFormat::JsonLines => self.containers_jsonl(),
+            },
+        }
+    }
+
+    /// Export raw growth history evidence in the requested format.
+    pub fn export_growth_history(&self, format: ExportFormat) -> EvidenceExport {
+        EvidenceExport {
+            format,
+            kind: "growth_history".to_owned(),
+            contents: match format {
+                ExportFormat::Csv => self.growth_history_csv(),
+                ExportFormat::JsonLines => self.growth_history_jsonl(),
+            },
+        }
+    }
+
+    /// Export growth attribution evidence in the requested format.
+    pub fn export_growth_attributions(&self, format: ExportFormat) -> EvidenceExport {
+        EvidenceExport {
+            format,
+            kind: "growth_attributions".to_owned(),
+            contents: match format {
+                ExportFormat::Csv => self.growth_attributions_csv(),
+                ExportFormat::JsonLines => self.growth_attributions_jsonl(),
+            },
+        }
     }
 
     /// Write this report as pretty JSON to a programmer-provided path.
@@ -1087,6 +1300,40 @@ impl BudgetReport {
     pub fn report(&self) -> String {
         self.to_string()
     }
+
+    /// Export typed budget violation evidence as CSV.
+    pub fn violations_csv(&self) -> String {
+        let mut csv = String::from("scope,container_name,metric,observed,limit,exceeded_by\n");
+        for violation in &self.violations {
+            csv.push_str(&csv_record([
+                violation.scope.clone(),
+                violation.container_name.clone().unwrap_or_default(),
+                violation.metric.clone(),
+                violation.observed.to_string(),
+                violation.limit.to_string(),
+                violation.exceeded_by.to_string(),
+            ]));
+            csv.push('\n');
+        }
+        csv
+    }
+
+    /// Export typed budget violation evidence as JSON Lines.
+    pub fn violations_jsonl(&self) -> String {
+        jsonl_lines(self.violations.iter())
+    }
+
+    /// Export typed budget violation evidence in the requested format.
+    pub fn export_violations(&self, format: ExportFormat) -> EvidenceExport {
+        EvidenceExport {
+            format,
+            kind: "budget_violations".to_owned(),
+            contents: match format {
+                ExportFormat::Csv => self.violations_csv(),
+                ExportFormat::JsonLines => self.violations_jsonl(),
+            },
+        }
+    }
 }
 
 impl fmt::Display for BudgetReport {
@@ -1142,6 +1389,40 @@ impl RegressionReport {
     /// Return a human-readable memory regression report.
     pub fn report(&self) -> String {
         self.to_string()
+    }
+
+    /// Export typed regression failure evidence as CSV.
+    pub fn regressions_csv(&self) -> String {
+        let mut csv = String::from("container_name,metric,baseline,current,delta,allowed_delta\n");
+        for regression in &self.regressions {
+            csv.push_str(&csv_record([
+                regression.container_name.clone(),
+                regression.metric.clone(),
+                regression.baseline.to_string(),
+                regression.current.to_string(),
+                regression.delta.to_string(),
+                regression.allowed_delta.to_string(),
+            ]));
+            csv.push('\n');
+        }
+        csv
+    }
+
+    /// Export typed regression failure evidence as JSON Lines.
+    pub fn regressions_jsonl(&self) -> String {
+        jsonl_lines(self.regressions.iter())
+    }
+
+    /// Export typed regression failure evidence in the requested format.
+    pub fn export_regressions(&self, format: ExportFormat) -> EvidenceExport {
+        EvidenceExport {
+            format,
+            kind: "regression_failures".to_owned(),
+            contents: match format {
+                ExportFormat::Csv => self.regressions_csv(),
+                ExportFormat::JsonLines => self.regressions_jsonl(),
+            },
+        }
     }
 }
 
@@ -1603,6 +1884,61 @@ fn append_growth_event_line(report: &mut String, event: &GrowthEvent) {
         event.capacity_added,
         event.growth_policy
     ));
+}
+
+fn csv_record<I, S>(fields: I) -> String
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    fields
+        .into_iter()
+        .map(|field| csv_field(field.as_ref()))
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn csv_field(field: &str) -> String {
+    if field.contains([',', '"', '\n', '\r']) {
+        format!("\"{}\"", field.replace('"', "\"\""))
+    } else {
+        field.to_owned()
+    }
+}
+
+fn jsonl_lines<I, T>(items: I) -> String
+where
+    I: IntoIterator<Item = T>,
+    T: Serialize,
+{
+    let mut lines = String::new();
+    for item in items {
+        lines.push_str(
+            &serde_json::to_string(&item)
+                .expect("serializing RIG evidence for JSON Lines should not fail"),
+        );
+        lines.push('\n');
+    }
+    lines
+}
+
+fn growth_events_csv(events: &[GrowthEvent]) -> String {
+    let mut csv = String::from(
+        "container_name,container_kind,old_capacity,new_capacity,operation_index,capacity_added,growth_policy\n",
+    );
+    for event in events {
+        csv.push_str(&csv_record([
+            event.container_name.clone(),
+            event.container_kind.clone(),
+            event.old_capacity.to_string(),
+            event.new_capacity.to_string(),
+            event.operation_index.to_string(),
+            event.capacity_added.to_string(),
+            event.growth_policy.clone(),
+        ]));
+        csv.push('\n');
+    }
+    csv
 }
 
 fn signed_delta(before: usize, after: usize) -> i64 {
