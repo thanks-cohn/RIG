@@ -150,6 +150,14 @@ A real v1 requires stable public API shape, useful rustdoc for exported types an
 
 ---
 
+## v1 Readiness and Trust Hardening
+
+RIG is being hardened for v1 as a trust-focused API, not as a feature-expansion release. The crate is explicit and evidence-based: callers create arenas, use tracked containers, request snapshots, evaluate budgets or contracts, and choose when to write evidence.
+
+RIG does not create hidden state, does not create hidden files or directories, does not run background services, and does not persist reports automatically. Any artifact, JSON report, diff, or export is written only when the caller invokes an explicit write API with an explicit path.
+
+The v1 readiness work emphasizes public API stability, typed errors, abuse-hardening tests, and documentation that makes side effects obvious. Empty evidence, unusual container names, missing files, invalid JSON, repeated explicit writes, and no-rule contracts are expected to stay deterministic and inspectable.
+
 ## Run the demo
 
 ```bash

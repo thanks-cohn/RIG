@@ -441,3 +441,13 @@ RIG can validate explicit memory behavior contracts for named workloads. A `Work
 Workload contracts are useful for CI gates, classroom grading, game-level validation, benchmark discipline, release certification, and reproducible audits because every `ContractReport` is derived from observed RIG evidence such as `ArenaReport`, `BudgetReport`, `RegressionReport`, `ProfileReport`, and `ArtifactComparison` data.
 
 Contract reports are typed, can be rendered as human-readable text, and JSON round-trip through `serde_json`. Contracts use observed evidence only: RIG does not add fake metrics, estimate capacity, infer missing rules, write files automatically, create hidden files, or persist anything unless the caller explicitly chooses a persistence API elsewhere.
+
+---
+
+## v1 Readiness and Trust Hardening
+
+RIG is being hardened toward v1 as an explicit, evidence-based library rather than a hidden runtime. The public API is intended to make allocation and growth behavior inspectable through caller-requested arenas, containers, reports, budgets, regressions, artifacts, exports, profiles, and workload contracts.
+
+RIG does not create hidden project state, does not run background services, does not start daemons, and does not persist evidence automatically. Snapshots, reports, diffs, budgets, profiles, contracts, and exports are in-memory evidence until the caller explicitly chooses a write method and provides a path.
+
+The v1 path is focused on API stability, clear errors, abuse resistance, and documentation clarity. RIG should remain boring under pressure: unusual names, empty reports, missing files, invalid JSON, repeated explicit writes, and empty evidence should produce deterministic behavior rather than magic side effects.
