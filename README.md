@@ -409,3 +409,13 @@ let current = current_arena.snapshot();
 let gate = current.check_regressions_against(&baseline, &RegressionBudget::strict());
 println!("{}", gate.report());
 ```
+
+## Memory budgets
+
+RIG can enforce explicit memory behavior budgets against observed RIG reports. A `MemoryBudget` defines limits for arena totals and per-container values such as current length, current capacity, growth-event count, and operation count.
+
+Budget checks are performed from `ArenaReport::check_budget(&budget)`. They use the values already present in `ArenaReport`, `ContainerReport`, and observed growth evidence; RIG does not invent fake metrics, estimate capacities, or infer missing data.
+
+Memory budgets are useful for schools, CI gates, benchmark discipline, production sanity checks, and memory-aware assignments because they answer whether a workload stayed inside its allowed memory behavior.
+
+Budget checks are in-memory operations and do not write files automatically. `BudgetReport` and `BudgetViolation` provide typed results, and `BudgetReport::report_json()` supports JSON round-trip through `serde_json`.

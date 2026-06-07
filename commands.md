@@ -173,3 +173,15 @@ cargo run --example regression_gate
 cargo test regression
 # Run regression-gate tests.
 ```
+
+```bash
+cargo run --example memory_budget
+```
+
+# Run memory budget example.
+
+```bash
+cargo test budget
+```
+
+# Run memory-budget tests.
