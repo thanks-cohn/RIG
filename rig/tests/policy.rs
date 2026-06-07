@@ -183,7 +183,7 @@ fn policy_string_reserve_ahead_records_real_growth_history() {
         text.push_str(&format!("event-{event_id};"));
     }
 
-    assert!(text.len() > 0);
+    assert!(!text.is_empty());
     assert!(text.growth_events() > 0);
     let snapshot = arena.snapshot();
     assert_eq!(snapshot.containers[0].growth_policy, "ReserveAhead(1024)");
