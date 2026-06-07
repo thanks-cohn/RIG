@@ -185,3 +185,16 @@ cargo test budget
 ```
 
 # Run memory-budget tests.
+
+```bash
+cargo run --example artifact_compare
+```
+
+# Run saved report artifact comparison example.
+
+```bash
+cargo test artifact
+```
+
+# Run report artifact tests.
+

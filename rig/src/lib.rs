@@ -114,7 +114,7 @@ use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -374,6 +374,39 @@ pub struct ArenaReport {
     pub growth_history: Vec<GrowthEvent>,
     /// Causal attribution records derived from observed live growth events.
     pub growth_attributions: Vec<GrowthAttribution>,
+}
+
+/// A saved RIG report artifact loaded from, or written to, an explicit caller-provided path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReportArtifact {
+    /// Caller-provided path for the JSON report artifact.
+    pub path: PathBuf,
+    /// Arena report evidence stored in the artifact.
+    pub report: ArenaReport,
+}
+
+/// Evidence comparison between two explicitly saved report artifacts.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArtifactComparison {
+    /// Path to the baseline JSON report artifact.
+    pub baseline_path: PathBuf,
+    /// Path to the current JSON report artifact.
+    pub current_path: PathBuf,
+    /// Baseline arena report evidence loaded from disk.
+    pub baseline: ArenaReport,
+    /// Current arena report evidence loaded from disk.
+    pub current: ArenaReport,
+    /// Allocation diff derived from the baseline and current reports.
+    pub diff: ArenaDiff,
+}
+
+#[derive(Debug, Serialize)]
+struct ArtifactComparisonJson<'a> {
+    baseline_path: &'a Path,
+    current_path: &'a Path,
+    baseline_arena_name: &'a str,
+    current_arena_name: &'a str,
+    diff: &'a ArenaDiff,
 }
 
 /// Explicit memory behavior budget checked against one observed [`ArenaReport`].
@@ -653,6 +686,68 @@ pub struct ArenaDiff {
     pub containers_changed: Vec<ContainerDiff>,
 }
 
+impl ReportArtifact {
+    /// Load exactly one saved [`ArenaReport`] JSON artifact from a caller-provided path.
+    pub fn load<P: AsRef<Path>>(path: P) -> Result<ReportArtifact, RigIoError> {
+        let path = path.as_ref();
+        let json = fs::read_to_string(path)?;
+        let report = serde_json::from_str(&json)?;
+
+        Ok(ReportArtifact {
+            path: path.to_path_buf(),
+            report,
+        })
+    }
+
+    /// Compare this baseline artifact to a current artifact without writing files.
+    pub fn compare_to(&self, current: &ReportArtifact) -> ArtifactComparison {
+        ArtifactComparison {
+            baseline_path: self.path.clone(),
+            current_path: current.path.clone(),
+            baseline: self.report.clone(),
+            current: current.report.clone(),
+            diff: self.report.diff(&current.report),
+        }
+    }
+}
+
+impl ArtifactComparison {
+    /// Run memory regression gates using the current artifact report against the baseline artifact report.
+    pub fn regression_report(&self, budget: &RegressionBudget) -> RegressionReport {
+        self.current
+            .check_regressions_against(&self.baseline, budget)
+    }
+
+    /// Run memory budget gates using only the current artifact report.
+    pub fn budget_report(&self, budget: &MemoryBudget) -> BudgetReport {
+        self.current.check_budget(budget)
+    }
+
+    /// Return a human-readable artifact comparison report.
+    pub fn report(&self) -> String {
+        format!(
+            "RIG report artifact comparison\nBaseline: {}\nCurrent: {}\n\nDiff: {}\n\nRegression gate:\nNot evaluated by artifact comparison report.\n\nBudget gate:\nNot evaluated by artifact comparison report.",
+            self.baseline_path.display(),
+            self.current_path.display(),
+            self.diff.report()
+        )
+    }
+
+    /// Return compact JSON evidence for this artifact comparison.
+    pub fn report_json(&self) -> String {
+        let evidence = ArtifactComparisonJson {
+            baseline_path: &self.baseline_path,
+            current_path: &self.current_path,
+            baseline_arena_name: &self.baseline.arena_name,
+            current_arena_name: &self.current.arena_name,
+            diff: &self.diff,
+        };
+
+        serde_json::to_string_pretty(&evidence)
+            .expect("serializing an ArtifactComparison should not fail")
+    }
+}
+
 impl ArenaReport {
     /// Check this report against explicit memory behavior limits.
     ///
@@ -798,6 +893,17 @@ impl ArenaReport {
     /// directories, background files, hidden files, or hidden directories.
     pub fn write_json(&self, path: impl AsRef<Path>) -> std::io::Result<()> {
         fs::write(path, self.report_json())
+    }
+
+    /// Write this report as exactly one JSON artifact to a caller-provided path.
+    pub fn write_artifact<P: AsRef<Path>>(&self, path: P) -> Result<ReportArtifact, RigIoError> {
+        let path = path.as_ref();
+        self.write_json(path)?;
+
+        Ok(ReportArtifact {
+            path: path.to_path_buf(),
+            report: self.clone(),
+        })
     }
 
     /// Check this current report against a baseline report using memory regression gates.
@@ -1515,16 +1621,16 @@ fn format_delta(delta: i64) -> String {
     }
 }
 
-/// Errors that can occur while loading a persisted [`ArenaReport`].
+/// Errors that can occur while reading or writing explicit RIG JSON artifacts.
 #[derive(Debug)]
-pub enum LoadReportError {
+pub enum RigIoError {
     /// The report file could not be read.
     Io(std::io::Error),
     /// The report file was read but did not contain valid `ArenaReport` JSON.
     Json(serde_json::Error),
 }
 
-impl fmt::Display for LoadReportError {
+impl fmt::Display for RigIoError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Io(error) => write!(formatter, "failed to read RIG report: {error}"),
@@ -1533,7 +1639,7 @@ impl fmt::Display for LoadReportError {
     }
 }
 
-impl Error for LoadReportError {
+impl Error for RigIoError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Io(error) => Some(error),
@@ -1542,17 +1648,20 @@ impl Error for LoadReportError {
     }
 }
 
-impl From<std::io::Error> for LoadReportError {
+impl From<std::io::Error> for RigIoError {
     fn from(error: std::io::Error) -> Self {
         Self::Io(error)
     }
 }
 
-impl From<serde_json::Error> for LoadReportError {
+impl From<serde_json::Error> for RigIoError {
     fn from(error: serde_json::Error) -> Self {
         Self::Json(error)
     }
 }
+
+/// Backward-compatible name for report JSON I/O errors.
+pub type LoadReportError = RigIoError;
 
 #[derive(Debug, Clone)]
 struct ContainerRecord {
@@ -1778,7 +1887,7 @@ impl Arena {
     }
 
     /// Load a previously persisted arena report from JSON on disk.
-    pub fn load_report(path: impl AsRef<Path>) -> Result<ArenaReport, LoadReportError> {
+    pub fn load_report(path: impl AsRef<Path>) -> Result<ArenaReport, RigIoError> {
         let json = fs::read_to_string(path)?;
         let report = serde_json::from_str(&json)?;
         Ok(report)
