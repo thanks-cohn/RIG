@@ -4,3 +4,6 @@ target/
 
 # Generated validation logs
 logs/*.log
+
+# Generated validation logs
+logs/*.log
