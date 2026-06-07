@@ -1201,11 +1201,9 @@ fn profile_arena_report(report: &ArenaReport) -> ProfileReport {
         .iter()
         .map(|container| container.total_capacity_added)
         .sum();
-    let average_growth_jump = if report.totals.total_growth_events == 0 {
-        0
-    } else {
-        total_capacity_added / report.totals.total_growth_events
-    };
+    let average_growth_jump = total_capacity_added
+        .checked_div(report.totals.total_growth_events)
+        .unwrap_or(0);
     if report.totals.total_growth_events >= FREQUENT_TINY_GROWTH_MIN_EVENTS
         && average_growth_jump <= FREQUENT_TINY_GROWTH_MAX_AVERAGE_JUMP
     {

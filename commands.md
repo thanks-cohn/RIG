@@ -77,6 +77,17 @@ cargo test --manifest-path rig/Cargo.toml policy
 cargo test --manifest-path rig/Cargo.toml capped
 ```
 
+
+```bash
+# Run abuse-hardening tests.
+cargo test abuse
+```
+
+```bash
+# Run API stability tests.
+cargo test api
+```
+
 ```bash
 # Run tests and show captured stdout/stderr.
 cargo test --manifest-path rig/Cargo.toml -- --nocapture
