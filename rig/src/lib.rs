@@ -376,6 +376,144 @@ pub struct ArenaReport {
     pub growth_attributions: Vec<GrowthAttribution>,
 }
 
+/// Explicit memory behavior budget checked against one observed [`ArenaReport`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MemoryBudget {
+    /// Maximum allowed aggregate current length, or `None` to skip this gate.
+    pub max_total_len: Option<usize>,
+    /// Maximum allowed aggregate current capacity, or `None` to skip this gate.
+    pub max_total_capacity: Option<usize>,
+    /// Maximum allowed aggregate growth-event count, or `None` to skip this gate.
+    pub max_total_growth_events: Option<usize>,
+    /// Maximum allowed aggregate push/append operation count, or `None` to skip this gate.
+    pub max_total_operations: Option<usize>,
+    /// Maximum allowed current length for each container, or `None` to skip this gate.
+    pub max_container_len: Option<usize>,
+    /// Maximum allowed current capacity for each container, or `None` to skip this gate.
+    pub max_container_capacity: Option<usize>,
+    /// Maximum allowed growth-event count for each container, or `None` to skip this gate.
+    pub max_container_growth_events: Option<usize>,
+    /// Maximum allowed push/append operation count for each container, or `None` to skip this gate.
+    pub max_container_operations: Option<usize>,
+}
+
+impl MemoryBudget {
+    /// Return a budget with no active limits.
+    pub fn unlimited() -> Self {
+        Self {
+            max_total_len: None,
+            max_total_capacity: None,
+            max_total_growth_events: None,
+            max_total_operations: None,
+            max_container_len: None,
+            max_container_capacity: None,
+            max_container_growth_events: None,
+            max_container_operations: None,
+        }
+    }
+
+    /// Return a budget that allows no observed growth events at arena or container scope.
+    pub fn strict_zero_growth() -> Self {
+        Self::unlimited()
+            .with_max_total_growth_events(0)
+            .with_max_container_growth_events(0)
+    }
+
+    /// Return a budget with an aggregate current-capacity limit.
+    pub fn max_total_capacity(value: usize) -> Self {
+        Self::unlimited().with_max_total_capacity(value)
+    }
+
+    /// Return a budget with an aggregate growth-event limit.
+    pub fn max_total_growth_events(value: usize) -> Self {
+        Self::unlimited().with_max_total_growth_events(value)
+    }
+
+    /// Return a budget with a per-container current-capacity limit.
+    pub fn max_container_capacity(value: usize) -> Self {
+        Self::unlimited().with_max_container_capacity(value)
+    }
+
+    /// Return a budget with a per-container growth-event limit.
+    pub fn max_container_growth_events(value: usize) -> Self {
+        Self::unlimited().with_max_container_growth_events(value)
+    }
+
+    /// Set the aggregate current-length limit.
+    pub fn with_max_total_len(mut self, value: usize) -> Self {
+        self.max_total_len = Some(value);
+        self
+    }
+
+    /// Set the aggregate current-capacity limit.
+    pub fn with_max_total_capacity(mut self, value: usize) -> Self {
+        self.max_total_capacity = Some(value);
+        self
+    }
+
+    /// Set the aggregate growth-event limit.
+    pub fn with_max_total_growth_events(mut self, value: usize) -> Self {
+        self.max_total_growth_events = Some(value);
+        self
+    }
+
+    /// Set the aggregate push/append operation limit.
+    pub fn with_max_total_operations(mut self, value: usize) -> Self {
+        self.max_total_operations = Some(value);
+        self
+    }
+
+    /// Set the per-container current-length limit.
+    pub fn with_max_container_len(mut self, value: usize) -> Self {
+        self.max_container_len = Some(value);
+        self
+    }
+
+    /// Set the per-container current-capacity limit.
+    pub fn with_max_container_capacity(mut self, value: usize) -> Self {
+        self.max_container_capacity = Some(value);
+        self
+    }
+
+    /// Set the per-container growth-event limit.
+    pub fn with_max_container_growth_events(mut self, value: usize) -> Self {
+        self.max_container_growth_events = Some(value);
+        self
+    }
+
+    /// Set the per-container push/append operation limit.
+    pub fn with_max_container_operations(mut self, value: usize) -> Self {
+        self.max_container_operations = Some(value);
+        self
+    }
+}
+
+/// Typed evidence for one memory-budget limit exceeded by observed report data.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BudgetViolation {
+    /// Violation scope, currently `arena` or `container`.
+    pub scope: String,
+    /// Container name for container-scoped violations.
+    pub container_name: Option<String>,
+    /// Metric that exceeded its budget limit.
+    pub metric: String,
+    /// Observed value from [`ArenaReport`] or [`ContainerReport`] evidence.
+    pub observed: usize,
+    /// Configured budget limit.
+    pub limit: usize,
+    /// Positive amount by which `observed` exceeded `limit`.
+    pub exceeded_by: usize,
+}
+
+/// Machine-readable result of checking one report against a [`MemoryBudget`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BudgetReport {
+    /// Whether all configured budget gates passed.
+    pub passed: bool,
+    /// Typed evidence for every failed budget gate.
+    pub violations: Vec<BudgetViolation>,
+}
+
 /// Typed evidence for one memory regression that exceeded a configured budget.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MemoryRegression {
@@ -516,6 +654,88 @@ pub struct ArenaDiff {
 }
 
 impl ArenaReport {
+    /// Check this report against explicit memory behavior limits.
+    ///
+    /// Budget checks use only values already present in this [`ArenaReport`]
+    /// and its [`ContainerReport`] entries. Missing limits are skipped; missing
+    /// data is never inferred or estimated.
+    pub fn check_budget(&self, budget: &MemoryBudget) -> BudgetReport {
+        let mut violations = Vec::new();
+
+        push_budget_violation_if_over_limit(
+            &mut violations,
+            "arena",
+            None,
+            "total_len",
+            self.totals.total_len,
+            budget.max_total_len,
+        );
+        push_budget_violation_if_over_limit(
+            &mut violations,
+            "arena",
+            None,
+            "total_current_capacity",
+            self.totals.total_current_capacity,
+            budget.max_total_capacity,
+        );
+        push_budget_violation_if_over_limit(
+            &mut violations,
+            "arena",
+            None,
+            "total_growth_events",
+            self.totals.total_growth_events,
+            budget.max_total_growth_events,
+        );
+        push_budget_violation_if_over_limit(
+            &mut violations,
+            "arena",
+            None,
+            "total_pushed_appended_operations",
+            self.totals.total_pushed_appended_operations,
+            budget.max_total_operations,
+        );
+
+        for container in &self.containers {
+            push_budget_violation_if_over_limit(
+                &mut violations,
+                "container",
+                Some(&container.name),
+                "len",
+                container.len,
+                budget.max_container_len,
+            );
+            push_budget_violation_if_over_limit(
+                &mut violations,
+                "container",
+                Some(&container.name),
+                "current_capacity",
+                container.current_capacity,
+                budget.max_container_capacity,
+            );
+            push_budget_violation_if_over_limit(
+                &mut violations,
+                "container",
+                Some(&container.name),
+                "growth_events",
+                container.growth_events,
+                budget.max_container_growth_events,
+            );
+            push_budget_violation_if_over_limit(
+                &mut violations,
+                "container",
+                Some(&container.name),
+                "total_operations",
+                container.total_operations,
+                budget.max_container_operations,
+            );
+        }
+
+        BudgetReport {
+            passed: violations.is_empty(),
+            violations,
+        }
+    }
+
     /// Return a compact summary derived from this report's raw growth history.
     pub fn growth_summary(&self) -> GrowthSummary {
         summarize_growth_events(&self.growth_history)
@@ -749,6 +969,62 @@ impl ContainerDiff {
     }
 }
 
+impl BudgetReport {
+    /// Serialize this budget report as pretty JSON.
+    ///
+    /// This is an in-memory operation and does not write files.
+    pub fn report_json(&self) -> String {
+        serde_json::to_string_pretty(self).expect("serializing a BudgetReport should not fail")
+    }
+
+    /// Return a human-readable memory budget report.
+    pub fn report(&self) -> String {
+        self.to_string()
+    }
+}
+
+impl fmt::Display for BudgetReport {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(formatter, "RIG memory budget report")?;
+        writeln!(
+            formatter,
+            "Status: {}",
+            if self.passed { "PASSED" } else { "FAILED" }
+        )?;
+        writeln!(formatter)?;
+        writeln!(formatter, "Violations:")?;
+        if self.violations.is_empty() {
+            write!(formatter, "(none)")?;
+        } else {
+            for (index, violation) in self.violations.iter().enumerate() {
+                match &violation.container_name {
+                    Some(container_name) => {
+                        writeln!(
+                            formatter,
+                            "{}. {} {}",
+                            index + 1,
+                            violation.scope,
+                            container_name
+                        )?;
+                    }
+                    None => {
+                        writeln!(formatter, "{}. {}", index + 1, violation.scope)?;
+                    }
+                }
+                writeln!(formatter, "   metric: {}", violation.metric)?;
+                writeln!(formatter, "   observed: {}", violation.observed)?;
+                writeln!(formatter, "   limit: {}", violation.limit)?;
+                write!(formatter, "   exceeded by: {}", violation.exceeded_by)?;
+                if index + 1 < self.violations.len() {
+                    writeln!(formatter)?;
+                    writeln!(formatter)?;
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
 impl RegressionReport {
     /// Serialize this regression report as pretty JSON.
     ///
@@ -928,6 +1204,28 @@ impl fmt::Display for ArenaDiff {
 enum GrowthHistoryMode {
     Compact,
     Verbose,
+}
+
+fn push_budget_violation_if_over_limit(
+    violations: &mut Vec<BudgetViolation>,
+    scope: &str,
+    container_name: Option<&str>,
+    metric: &str,
+    observed: usize,
+    limit: Option<usize>,
+) {
+    if let Some(limit) = limit {
+        if observed > limit {
+            violations.push(BudgetViolation {
+                scope: scope.to_owned(),
+                container_name: container_name.map(str::to_owned),
+                metric: metric.to_owned(),
+                observed,
+                limit,
+                exceeded_by: observed - limit,
+            });
+        }
+    }
 }
 
 fn push_regression_if_over_budget(
