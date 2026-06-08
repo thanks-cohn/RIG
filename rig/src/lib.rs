@@ -116,6 +116,8 @@ use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ContainerKind {
@@ -309,6 +311,15 @@ struct CertificateFingerprintEvidence<'a> {
     regression_violation_count: usize,
     profile_count: usize,
     summary: &'a str,
+}
+
+static NEXT_EVIDENCE_SESSION_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+fn current_unix_epoch_seconds() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time must not be before the Unix epoch for evidence timestamps")
+        .as_secs()
 }
 
 fn fingerprint_serializable<T: Serialize>(value: &T) -> EvidenceFingerprint {
@@ -610,6 +621,310 @@ pub struct ArenaReport {
     pub growth_history: Vec<GrowthEvent>,
     /// Causal attribution records derived from observed live growth events.
     pub growth_attributions: Vec<GrowthAttribution>,
+}
+
+/// Immutable metadata attached to one evidence capture session.
+///
+/// Every field is populated from the live process or caller-provided labels at
+/// session creation time; no placeholder values are invented by RIG.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EvidenceMetadata {
+    /// Durable schema name for JSON artifacts emitted by [`EvidenceArtifact`].
+    pub schema: String,
+    /// Schema version for evidence capture artifacts.
+    pub schema_version: u32,
+    /// Caller-supplied workload or application name.
+    pub workload_name: String,
+    /// Runtime process id that created this session.
+    pub process_id: u32,
+    /// Unix timestamp, in seconds, observed when the session was created.
+    pub started_unix_epoch_seconds: u64,
+    /// Monotonic in-process sequence observed when the session was created.
+    pub session_sequence: u64,
+    /// Deterministic session id derived from real process/time/workload inputs.
+    pub session_id: String,
+}
+
+/// One named arena snapshot captured during an [`EvidenceSession`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EvidenceCheckpoint {
+    /// Caller-supplied checkpoint name.
+    pub name: String,
+    /// Zero-based capture order within the session.
+    pub sequence: usize,
+    /// Unix timestamp, in seconds, observed when this checkpoint was captured.
+    pub captured_unix_epoch_seconds: u64,
+    /// Arena snapshot captured directly from the live RIG-managed arena.
+    pub arena: ArenaReport,
+}
+
+/// In-memory evidence session containing real checkpoints captured from an arena.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EvidenceSession {
+    /// Runtime and caller metadata for this session.
+    pub metadata: EvidenceMetadata,
+    /// Named checkpoints captured from observed arena snapshots.
+    pub checkpoints: Vec<EvidenceCheckpoint>,
+}
+
+/// Durable JSON evidence artifact emitted by [`EvidenceCapture`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EvidenceArtifact {
+    /// Runtime and caller metadata copied from the evidence session.
+    pub metadata: EvidenceMetadata,
+    /// Named arena checkpoints captured from real runtime state.
+    pub checkpoints: Vec<EvidenceCheckpoint>,
+}
+
+/// Machine-readable comparison between two captured evidence checkpoints.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EvidenceComparison {
+    /// Baseline artifact session id.
+    pub baseline_session_id: String,
+    /// Current artifact session id.
+    pub current_session_id: String,
+    /// Baseline checkpoint name.
+    pub baseline_checkpoint: String,
+    /// Current checkpoint name.
+    pub current_checkpoint: String,
+    /// Allocation diff derived from the two captured arena snapshots.
+    pub diff: ArenaDiff,
+}
+
+/// Capture layer for named runtime checkpoints from RIG-managed arenas.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EvidenceCapture {
+    session: EvidenceSession,
+}
+
+impl EvidenceMetadata {
+    /// Create metadata for a new evidence session using live process/time values.
+    pub fn new(workload_name: impl Into<String>) -> Self {
+        let workload_name = workload_name.into();
+        let process_id = std::process::id();
+        let started_unix_epoch_seconds = current_unix_epoch_seconds();
+        let session_sequence = NEXT_EVIDENCE_SESSION_SEQUENCE.fetch_add(1, Ordering::SeqCst);
+        let mut id_input = Vec::new();
+        id_input.extend_from_slice(workload_name.as_bytes());
+        id_input.extend_from_slice(&process_id.to_le_bytes());
+        id_input.extend_from_slice(&started_unix_epoch_seconds.to_le_bytes());
+        id_input.extend_from_slice(&session_sequence.to_le_bytes());
+        let fingerprint = EvidenceFingerprint::fnv1a64(&id_input);
+
+        Self {
+            schema: "rig.evidence_capture".to_owned(),
+            schema_version: 1,
+            workload_name,
+            process_id,
+            started_unix_epoch_seconds,
+            session_sequence,
+            session_id: fingerprint.value,
+        }
+    }
+}
+
+impl EvidenceSession {
+    /// Start an empty evidence session for the named workload.
+    pub fn new(workload_name: impl Into<String>) -> Self {
+        Self {
+            metadata: EvidenceMetadata::new(workload_name),
+            checkpoints: Vec::new(),
+        }
+    }
+
+    /// Return the latest captured checkpoint, if one exists.
+    pub fn latest_checkpoint(&self) -> Option<&EvidenceCheckpoint> {
+        self.checkpoints.last()
+    }
+
+    /// Convert this session into a durable evidence artifact.
+    pub fn artifact(&self) -> EvidenceArtifact {
+        EvidenceArtifact {
+            metadata: self.metadata.clone(),
+            checkpoints: self.checkpoints.clone(),
+        }
+    }
+}
+
+impl EvidenceCapture {
+    /// Start capturing evidence for the named workload.
+    pub fn new(workload_name: impl Into<String>) -> Self {
+        Self {
+            session: EvidenceSession::new(workload_name),
+        }
+    }
+
+    /// Return the current in-memory evidence session.
+    pub fn session(&self) -> &EvidenceSession {
+        &self.session
+    }
+
+    /// Capture one named checkpoint from a live arena snapshot.
+    pub fn capture_checkpoint(
+        &mut self,
+        name: impl Into<String>,
+        arena: &Arena,
+    ) -> EvidenceCheckpoint {
+        let checkpoint = EvidenceCheckpoint {
+            name: name.into(),
+            sequence: self.session.checkpoints.len(),
+            captured_unix_epoch_seconds: current_unix_epoch_seconds(),
+            arena: arena.snapshot(),
+        };
+        self.session.checkpoints.push(checkpoint.clone());
+        checkpoint
+    }
+
+    /// Capture before/after evidence around a real workload closure.
+    pub fn capture_workload<F>(
+        &mut self,
+        arena: &Arena,
+        before_name: impl Into<String>,
+        after_name: impl Into<String>,
+        workload: F,
+    ) -> EvidenceComparison
+    where
+        F: FnOnce(),
+    {
+        let before = self.capture_checkpoint(before_name, arena);
+        workload();
+        let after = self.capture_checkpoint(after_name, arena);
+        EvidenceComparison::from_checkpoints(
+            &self.session.metadata.session_id,
+            &self.session.metadata.session_id,
+            &before,
+            &after,
+        )
+    }
+
+    /// Return a durable artifact containing all captured checkpoints.
+    pub fn artifact(&self) -> EvidenceArtifact {
+        self.session.artifact()
+    }
+}
+
+impl EvidenceArtifact {
+    /// Return a deterministic non-cryptographic fingerprint of this evidence artifact.
+    pub fn fingerprint(&self) -> EvidenceFingerprint {
+        fingerprint_serializable(self)
+    }
+
+    /// Serialize this evidence artifact as pretty JSON.
+    pub fn report_json(&self) -> String {
+        serde_json::to_string_pretty(self).expect("serializing an EvidenceArtifact should not fail")
+    }
+
+    /// Return a human-readable evidence report for this artifact.
+    pub fn report(&self) -> String {
+        let mut report = format!(
+            "RIG evidence capture artifact\nSession: {}\nWorkload: {}\nProcess id: {}\nStarted unix epoch seconds: {}\nSession sequence: {}\nCheckpoints: {}\nFingerprint: {}",
+            self.metadata.session_id,
+            self.metadata.workload_name,
+            self.metadata.process_id,
+            self.metadata.started_unix_epoch_seconds,
+            self.metadata.session_sequence,
+            self.checkpoints.len(),
+            self.fingerprint()
+        );
+
+        for checkpoint in &self.checkpoints {
+            report.push_str(&format!(
+                "\n\nCheckpoint {}: {}\nCaptured unix epoch seconds: {}\nArena: {}\nTracked containers: {}\nTotal len: {}\nTotal current capacity: {}\nTotal growth events: {}\nTotal operations: {}",
+                checkpoint.sequence,
+                checkpoint.name,
+                checkpoint.captured_unix_epoch_seconds,
+                checkpoint.arena.arena_name,
+                checkpoint.arena.tracked_container_count,
+                checkpoint.arena.totals.total_len,
+                checkpoint.arena.totals.total_current_capacity,
+                checkpoint.arena.totals.total_growth_events,
+                checkpoint.arena.totals.total_pushed_appended_operations,
+            ));
+        }
+
+        report
+    }
+
+    /// Save this evidence artifact as JSON to an explicit caller-provided path.
+    pub fn save_json<P: AsRef<Path>>(&self, path: P) -> Result<(), RigIoError> {
+        fs::write(path, self.report_json())?;
+        Ok(())
+    }
+
+    /// Load one evidence artifact from a caller-provided JSON path.
+    pub fn load_json<P: AsRef<Path>>(path: P) -> Result<Self, RigIoError> {
+        let json = fs::read_to_string(path)?;
+        Ok(serde_json::from_str(&json)?)
+    }
+
+    /// Compare the latest checkpoint in this artifact to the latest checkpoint in another artifact.
+    pub fn compare_latest(&self, current: &EvidenceArtifact) -> Option<EvidenceComparison> {
+        let baseline = self.checkpoints.last()?;
+        let current_checkpoint = current.checkpoints.last()?;
+        Some(EvidenceComparison::from_checkpoints(
+            &self.metadata.session_id,
+            &current.metadata.session_id,
+            baseline,
+            current_checkpoint,
+        ))
+    }
+
+    /// Compare two named checkpoints from this artifact.
+    pub fn compare_checkpoints(
+        &self,
+        baseline_name: &str,
+        current_name: &str,
+    ) -> Option<EvidenceComparison> {
+        let baseline = self
+            .checkpoints
+            .iter()
+            .find(|checkpoint| checkpoint.name == baseline_name)?;
+        let current = self
+            .checkpoints
+            .iter()
+            .find(|checkpoint| checkpoint.name == current_name)?;
+        Some(EvidenceComparison::from_checkpoints(
+            &self.metadata.session_id,
+            &self.metadata.session_id,
+            baseline,
+            current,
+        ))
+    }
+}
+
+impl EvidenceComparison {
+    fn from_checkpoints(
+        baseline_session_id: &str,
+        current_session_id: &str,
+        baseline: &EvidenceCheckpoint,
+        current: &EvidenceCheckpoint,
+    ) -> Self {
+        Self {
+            baseline_session_id: baseline_session_id.to_owned(),
+            current_session_id: current_session_id.to_owned(),
+            baseline_checkpoint: baseline.name.clone(),
+            current_checkpoint: current.name.clone(),
+            diff: baseline.arena.diff(&current.arena),
+        }
+    }
+
+    /// Serialize this evidence comparison as pretty JSON.
+    pub fn report_json(&self) -> String {
+        serde_json::to_string_pretty(self)
+            .expect("serializing an EvidenceComparison should not fail")
+    }
+
+    /// Return a human-readable comparison report.
+    pub fn report(&self) -> String {
+        format!(
+            "RIG evidence comparison\nBaseline session: {}\nCurrent session: {}\nBaseline checkpoint: {}\nCurrent checkpoint: {}\n{}",
+            self.baseline_session_id,
+            self.current_session_id,
+            self.baseline_checkpoint,
+            self.current_checkpoint,
+            self.diff.report()
+        )
+    }
 }
 
 /// Deterministic memory behavior profile names derived from observed RIG evidence.

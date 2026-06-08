@@ -461,11 +461,11 @@ LOG
   errors="$(count_matches '(^error(\[|:)|^[[:space:]]*error:|panicked at)' "$sample_log")"
   warnings="$(count_matches '(^warning(\[|:)|^[[:space:]]*warning:)' "$sample_log")"
 
-  summary="$(print_summary 0.20.0 abc123 2026-06-07T00:00:00Z 5 PASS PASS PASS PASS PASS "$total_tests" "$doc_tests" 3 "$errors" "$warnings" 0 0 0 0 "0 observed" "$sample_log, $sample_audit" YES "- No failures" "- Contracts passed")"
+  summary="$(print_summary 0.21.0 abc123 2026-06-07T00:00:00Z 5 PASS PASS PASS PASS PASS "$total_tests" "$doc_tests" 3 "$errors" "$warnings" 0 0 0 0 "0 observed" "$sample_log, $sample_audit" YES "- No failures" "- Contracts passed")"
   write_audit 0.19.0 abc123 2026-06-07T00:00:00Z PASS PASS PASS PASS PASS "$total_tests" "$doc_tests" 3 "$errors" "$warnings" YES "$sample_audit"
 
   [[ "$summary" == *"END-OF-RUN EVIDENCE SUMMARY"* ]] || return 1
-  [[ "$summary" == *"Version: 0.20.0"* ]] || return 1
+  [[ "$summary" == *"Version: 0.21.0"* ]] || return 1
   [[ "$summary" == *"Total tests executed: 2"* ]] || return 1
   [[ "$summary" == *"Documentation tests executed: 1"* ]] || return 1
   [[ "$summary" == *"Total failures: 1"* ]] || return 1
