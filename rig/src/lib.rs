@@ -860,6 +860,640 @@ pub struct ContractReport {
     pub profile_report: Option<ProfileReport>,
 }
 
+/// Aggregate allocation limits for a workload memory doctrine contract.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AllocationBudget {
+    /// Maximum allowed aggregate arena capacity across all tracked containers.
+    pub max_arena_capacity: Option<usize>,
+    /// Maximum allowed aggregate growth event count across all tracked containers.
+    pub max_growth_events: Option<usize>,
+    /// Maximum allowed capacity added by any single observed growth event.
+    pub max_capacity_expansion: Option<usize>,
+}
+
+impl AllocationBudget {
+    /// Create an allocation budget with no active aggregate limits.
+    pub fn unlimited() -> Self {
+        Self {
+            max_arena_capacity: None,
+            max_growth_events: None,
+            max_capacity_expansion: None,
+        }
+    }
+
+    /// Set the maximum aggregate arena capacity.
+    pub fn with_max_arena_capacity(mut self, value: usize) -> Self {
+        self.max_arena_capacity = Some(value);
+        self
+    }
+
+    /// Set the maximum aggregate growth event count.
+    pub fn with_max_growth_events(mut self, value: usize) -> Self {
+        self.max_growth_events = Some(value);
+        self
+    }
+
+    /// Set the maximum single-event capacity expansion.
+    pub fn with_max_capacity_expansion(mut self, value: usize) -> Self {
+        self.max_capacity_expansion = Some(value);
+        self
+    }
+}
+
+/// Per-container allocation limits for a workload memory doctrine contract.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContainerBudget {
+    /// Optional container name; `None` applies this budget to every observed container.
+    pub container_name: Option<String>,
+    /// Maximum allowed current capacity for each matching container.
+    pub max_capacity: Option<usize>,
+    /// Maximum allowed growth-event count for each matching container.
+    pub max_growth_events: Option<usize>,
+    /// Maximum allowed single-event capacity expansion for each matching container.
+    pub max_capacity_expansion: Option<usize>,
+}
+
+impl ContainerBudget {
+    /// Create a budget that applies to every observed container.
+    pub fn any_container() -> Self {
+        Self {
+            container_name: None,
+            max_capacity: None,
+            max_growth_events: None,
+            max_capacity_expansion: None,
+        }
+    }
+
+    /// Create a budget that applies to the named container only.
+    pub fn named(container_name: impl Into<String>) -> Self {
+        Self {
+            container_name: Some(container_name.into()),
+            ..Self::any_container()
+        }
+    }
+
+    /// Set the maximum current capacity for matching containers.
+    pub fn with_max_capacity(mut self, value: usize) -> Self {
+        self.max_capacity = Some(value);
+        self
+    }
+
+    /// Set the maximum growth-event count for matching containers.
+    pub fn with_max_growth_events(mut self, value: usize) -> Self {
+        self.max_growth_events = Some(value);
+        self
+    }
+
+    /// Set the maximum single-event capacity expansion for matching containers.
+    pub fn with_max_capacity_expansion(mut self, value: usize) -> Self {
+        self.max_capacity_expansion = Some(value);
+        self
+    }
+}
+
+/// Regression limits for benchmark comparison evidence.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RegressionExpectation {
+    /// Human-readable expectation name used in validation reports.
+    pub name: String,
+    /// Explicit allowed regression ranges evaluated against baseline/current evidence.
+    pub budget: RegressionBudget,
+}
+
+impl RegressionExpectation {
+    /// Create a named regression expectation from a concrete regression budget.
+    pub fn new(name: impl Into<String>, budget: RegressionBudget) -> Self {
+        Self {
+            name: name.into(),
+            budget,
+        }
+    }
+}
+
+/// Required and forbidden profile doctrine for observed growth behavior.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GrowthProfileExpectation {
+    /// Profile kinds that must be present in observed profile evidence.
+    pub required: Vec<MemoryProfileKind>,
+    /// Profile kinds that must be absent from observed profile evidence.
+    pub forbidden: Vec<MemoryProfileKind>,
+}
+
+impl GrowthProfileExpectation {
+    /// Create a profile expectation with no required or forbidden profiles.
+    pub fn empty() -> Self {
+        Self {
+            required: Vec::new(),
+            forbidden: Vec::new(),
+        }
+    }
+
+    /// Require an observed growth profile kind.
+    pub fn require(mut self, kind: MemoryProfileKind) -> Self {
+        self.required.push(kind);
+        self
+    }
+
+    /// Forbid an observed growth profile kind.
+    pub fn forbid(mut self, kind: MemoryProfileKind) -> Self {
+        self.forbidden.push(kind);
+        self
+    }
+}
+
+/// Complete memory doctrine contract for one workload.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkloadMemoryContract {
+    /// Human-readable contract name.
+    pub name: String,
+    /// Human-readable description of the expected workload behavior.
+    pub description: String,
+    /// Aggregate allocation budget checked against current evidence.
+    pub allocation_budget: Option<AllocationBudget>,
+    /// Container budgets checked against current per-container evidence.
+    pub container_budgets: Vec<ContainerBudget>,
+    /// Regression expectations checked only when benchmark evidence includes a baseline.
+    pub regression_expectations: Vec<RegressionExpectation>,
+    /// Growth profile requirements and prohibitions.
+    pub growth_profile_expectation: GrowthProfileExpectation,
+}
+
+impl WorkloadMemoryContract {
+    /// Create a memory doctrine contract with no active rules.
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            description: String::new(),
+            allocation_budget: None,
+            container_budgets: Vec::new(),
+            regression_expectations: Vec::new(),
+            growth_profile_expectation: GrowthProfileExpectation::empty(),
+        }
+    }
+
+    /// Set a human-readable contract description.
+    pub fn with_description(mut self, description: impl Into<String>) -> Self {
+        self.description = description.into();
+        self
+    }
+
+    /// Require aggregate allocation behavior to remain within the provided budget.
+    pub fn with_allocation_budget(mut self, budget: AllocationBudget) -> Self {
+        self.allocation_budget = Some(budget);
+        self
+    }
+
+    /// Add a per-container budget.
+    pub fn with_container_budget(mut self, budget: ContainerBudget) -> Self {
+        self.container_budgets.push(budget);
+        self
+    }
+
+    /// Add a regression expectation.
+    pub fn with_regression_expectation(mut self, expectation: RegressionExpectation) -> Self {
+        self.regression_expectations.push(expectation);
+        self
+    }
+
+    /// Replace the growth profile expectation.
+    pub fn with_growth_profile_expectation(
+        mut self,
+        expectation: GrowthProfileExpectation,
+    ) -> Self {
+        self.growth_profile_expectation = expectation;
+        self
+    }
+
+    /// Validate this doctrine contract against actual benchmark evidence.
+    pub fn validate(&self, evidence: &BenchmarkEvidence) -> DoctrineValidationReport {
+        validate_memory_doctrine(self, evidence)
+    }
+}
+
+/// Stable reference to the observed evidence that justified a doctrine decision.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EvidenceReference {
+    /// Evidence source category, such as `arena_report`, `growth_event`, or `regression_report`.
+    pub source: String,
+    /// Evidence subject, such as arena name, container name, or regression metric.
+    pub subject: String,
+    /// Metric used for the decision.
+    pub metric: String,
+    /// Observed value rendered without inference.
+    pub observed: String,
+}
+
+/// One memory doctrine contract violation backed by explicit evidence references.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DoctrineViolation {
+    /// Rule category that failed.
+    pub category: String,
+    /// Subject of the failed rule.
+    pub subject: String,
+    /// Human-readable explanation.
+    pub explanation: String,
+    /// Evidence references supporting this decision.
+    pub evidence_references: Vec<EvidenceReference>,
+}
+
+/// Validation result for a workload memory doctrine contract.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DoctrineValidationReport {
+    /// Contract that was evaluated.
+    pub contract_name: String,
+    /// Benchmark evidence name that was evaluated.
+    pub benchmark_name: String,
+    /// Whether all doctrine rules passed.
+    pub passed: bool,
+    /// Detailed violation evidence.
+    pub violations: Vec<DoctrineViolation>,
+    /// Current workload profile evidence used by validation.
+    pub profile_report: ProfileReport,
+    /// Regression reports generated for each configured expectation.
+    pub regression_reports: Vec<RegressionReport>,
+    /// Human-readable high-signal summary.
+    pub summary: String,
+}
+
+impl DoctrineValidationReport {
+    /// Serialize the validation report as pretty JSON.
+    pub fn report_json(&self) -> String {
+        serde_json::to_string_pretty(self)
+            .expect("serializing a DoctrineValidationReport should not fail")
+    }
+
+    /// Return a human-readable validation report.
+    pub fn report(&self) -> String {
+        self.to_string()
+    }
+
+    /// Return a deterministic fingerprint of the validation evidence.
+    pub fn fingerprint(&self) -> EvidenceFingerprint {
+        fingerprint_serializable(self)
+    }
+
+    /// Certify this doctrine report as durable evidence.
+    pub fn certify(&self, subject: CertificationSubject) -> EvidenceCertificate {
+        build_certificate(CertificateDraft {
+            subject,
+            passed: self.passed,
+            report_fingerprint: self.fingerprint(),
+            contract_name: Some(self.contract_name.clone()),
+            violation_count: self.violations.len(),
+            budget_violation_count: self
+                .violations
+                .iter()
+                .filter(|violation| violation.category.contains("budget"))
+                .count(),
+            regression_violation_count: self
+                .violations
+                .iter()
+                .filter(|violation| violation.category == "regression")
+                .count(),
+            profile_count: self.profile_report.profiles.len(),
+            summary: self.summary.clone(),
+        })
+    }
+}
+
+impl fmt::Display for DoctrineValidationReport {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(formatter, "RIG memory doctrine validation report")?;
+        writeln!(formatter, "Contract: {}", self.contract_name)?;
+        writeln!(formatter, "Benchmark: {}", self.benchmark_name)?;
+        writeln!(
+            formatter,
+            "Status: {}",
+            if self.passed { "PASSED" } else { "FAILED" }
+        )?;
+        writeln!(formatter, "Summary: {}", self.summary)?;
+        writeln!(formatter)?;
+        writeln!(formatter, "Violations: {}", self.violations.len())?;
+        if self.violations.is_empty() {
+            write!(formatter, "  (none)")?;
+        } else {
+            for (index, violation) in self.violations.iter().enumerate() {
+                writeln!(formatter, "{}. {}", index + 1, violation.category)?;
+                writeln!(formatter, "   subject: {}", violation.subject)?;
+                writeln!(formatter, "   explanation: {}", violation.explanation)?;
+                write!(formatter, "   evidence:")?;
+                for reference in &violation.evidence_references {
+                    write!(
+                        formatter,
+                        " [{} {} {}={}]",
+                        reference.source, reference.subject, reference.metric, reference.observed
+                    )?;
+                }
+                if index + 1 < self.violations.len() {
+                    writeln!(formatter)?;
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Benchmark evidence captured from actual RIG allocation reports.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BenchmarkEvidence {
+    /// Human-readable benchmark name.
+    pub name: String,
+    /// Baseline report when this evidence represents a comparison.
+    pub baseline: Option<ArenaReport>,
+    /// Current observed report.
+    pub current: ArenaReport,
+    /// Diff derived from baseline and current reports when a baseline is present.
+    pub diff: Option<ArenaDiff>,
+    /// Current capacity-growth summary.
+    pub growth_summary: GrowthSummary,
+    /// Current deterministic growth profile report.
+    pub profile_report: ProfileReport,
+    /// Strict regression comparison included when a baseline is present.
+    pub strict_regression_report: Option<RegressionReport>,
+}
+
+impl BenchmarkEvidence {
+    /// Build benchmark evidence from one observed current report.
+    pub fn from_current(name: impl Into<String>, current: ArenaReport) -> Self {
+        Self {
+            name: name.into(),
+            growth_summary: current.growth_summary(),
+            profile_report: current.profile(),
+            baseline: None,
+            current,
+            diff: None,
+            strict_regression_report: None,
+        }
+    }
+
+    /// Build benchmark comparison evidence from observed baseline and current reports.
+    pub fn compare(name: impl Into<String>, baseline: ArenaReport, current: ArenaReport) -> Self {
+        let diff = baseline.diff(&current);
+        let strict_regression_report =
+            current.check_regressions_against(&baseline, &RegressionBudget::strict());
+        Self {
+            name: name.into(),
+            growth_summary: current.growth_summary(),
+            profile_report: current.profile(),
+            baseline: Some(baseline),
+            current,
+            diff: Some(diff),
+            strict_regression_report: Some(strict_regression_report),
+        }
+    }
+
+    /// Serialize benchmark evidence as pretty JSON.
+    pub fn report_json(&self) -> String {
+        serde_json::to_string_pretty(self).expect("serializing BenchmarkEvidence should not fail")
+    }
+
+    /// Return a deterministic benchmark evidence fingerprint.
+    pub fn fingerprint(&self) -> EvidenceFingerprint {
+        fingerprint_serializable(self)
+    }
+}
+
+fn validate_memory_doctrine(
+    contract: &WorkloadMemoryContract,
+    evidence: &BenchmarkEvidence,
+) -> DoctrineValidationReport {
+    let mut violations = Vec::new();
+    let mut regression_reports = Vec::new();
+    let current = &evidence.current;
+
+    if let Some(budget) = &contract.allocation_budget {
+        push_doctrine_limit(
+            &mut violations,
+            "allocation_budget",
+            "arena",
+            "total_current_capacity",
+            current.totals.total_current_capacity,
+            budget.max_arena_capacity,
+            EvidenceReference {
+                source: "arena_report".to_owned(),
+                subject: current.arena_name.clone(),
+                metric: "total_current_capacity".to_owned(),
+                observed: current.totals.total_current_capacity.to_string(),
+            },
+        );
+        push_doctrine_limit(
+            &mut violations,
+            "allocation_budget",
+            "arena",
+            "total_growth_events",
+            current.totals.total_growth_events,
+            budget.max_growth_events,
+            EvidenceReference {
+                source: "arena_report".to_owned(),
+                subject: current.arena_name.clone(),
+                metric: "total_growth_events".to_owned(),
+                observed: current.totals.total_growth_events.to_string(),
+            },
+        );
+        if let Some(limit) = budget.max_capacity_expansion {
+            for event in &current.growth_history {
+                if event.capacity_added > limit {
+                    violations.push(DoctrineViolation {
+                        category: "allocation_budget".to_owned(),
+                        subject: event.container_name.clone(),
+                        explanation: format!(
+                            "single capacity expansion {} exceeded allocation limit {}",
+                            event.capacity_added, limit
+                        ),
+                        evidence_references: vec![growth_event_reference(event)],
+                    });
+                }
+            }
+        }
+    }
+
+    for budget in &contract.container_budgets {
+        for container in current.containers.iter().filter(|container| {
+            budget
+                .container_name
+                .as_deref()
+                .map(|name| name == container.name)
+                .unwrap_or(true)
+        }) {
+            push_doctrine_limit(
+                &mut violations,
+                "container_budget",
+                &container.name,
+                "current_capacity",
+                container.current_capacity,
+                budget.max_capacity,
+                EvidenceReference {
+                    source: "container_report".to_owned(),
+                    subject: container.name.clone(),
+                    metric: "current_capacity".to_owned(),
+                    observed: container.current_capacity.to_string(),
+                },
+            );
+            push_doctrine_limit(
+                &mut violations,
+                "container_budget",
+                &container.name,
+                "growth_events",
+                container.growth_events,
+                budget.max_growth_events,
+                EvidenceReference {
+                    source: "container_report".to_owned(),
+                    subject: container.name.clone(),
+                    metric: "growth_events".to_owned(),
+                    observed: container.growth_events.to_string(),
+                },
+            );
+            if let Some(limit) = budget.max_capacity_expansion {
+                for event in current.growth_history.iter().filter(|event| {
+                    event.container_name == container.name && event.capacity_added > limit
+                }) {
+                    violations.push(DoctrineViolation {
+                        category: "container_budget".to_owned(),
+                        subject: container.name.clone(),
+                        explanation: format!(
+                            "single capacity expansion {} exceeded container limit {}",
+                            event.capacity_added, limit
+                        ),
+                        evidence_references: vec![growth_event_reference(event)],
+                    });
+                }
+            }
+        }
+    }
+
+    for kind in &contract.growth_profile_expectation.required {
+        let count = evidence.profile_report.profiles_by_kind(*kind).len();
+        if count == 0 {
+            violations.push(DoctrineViolation {
+                category: "growth_profile_required".to_owned(),
+                subject: contract.name.clone(),
+                explanation: format!("required growth profile {kind} was not observed"),
+                evidence_references: vec![EvidenceReference {
+                    source: "profile_report".to_owned(),
+                    subject: evidence.name.clone(),
+                    metric: format!("profile_count:{kind}"),
+                    observed: count.to_string(),
+                }],
+            });
+        }
+    }
+    for kind in &contract.growth_profile_expectation.forbidden {
+        for profile in evidence.profile_report.profiles_by_kind(*kind) {
+            violations.push(DoctrineViolation {
+                category: "growth_profile_forbidden".to_owned(),
+                subject: profile.subject.clone(),
+                explanation: format!(
+                    "forbidden growth profile {kind} was observed: {}",
+                    profile.reason
+                ),
+                evidence_references: vec![EvidenceReference {
+                    source: "profile_report".to_owned(),
+                    subject: profile.subject.clone(),
+                    metric: profile.evidence_metric.clone(),
+                    observed: profile.evidence_value.to_string(),
+                }],
+            });
+        }
+    }
+
+    for expectation in &contract.regression_expectations {
+        match &evidence.baseline {
+            Some(baseline) => {
+                let report = current.check_regressions_against(baseline, &expectation.budget);
+                for regression in &report.regressions {
+                    violations.push(DoctrineViolation {
+                        category: "regression".to_owned(),
+                        subject: regression.container_name.clone(),
+                        explanation: format!(
+                            "{} delta {} exceeded allowed delta {} for expectation {}",
+                            regression.metric,
+                            regression.delta,
+                            regression.allowed_delta,
+                            expectation.name
+                        ),
+                        evidence_references: vec![EvidenceReference {
+                            source: "regression_report".to_owned(),
+                            subject: regression.container_name.clone(),
+                            metric: regression.metric.clone(),
+                            observed: format!(
+                                "baseline={},current={},delta={}",
+                                regression.baseline, regression.current, regression.delta
+                            ),
+                        }],
+                    });
+                }
+                regression_reports.push(report);
+            }
+            None => violations.push(DoctrineViolation {
+                category: "regression".to_owned(),
+                subject: expectation.name.clone(),
+                explanation: "regression expectation required baseline evidence, but benchmark evidence had no baseline".to_owned(),
+                evidence_references: vec![EvidenceReference {
+                    source: "benchmark_evidence".to_owned(),
+                    subject: evidence.name.clone(),
+                    metric: "baseline_present".to_owned(),
+                    observed: "false".to_owned(),
+                }],
+            }),
+        }
+    }
+
+    let passed = violations.is_empty();
+    let summary = format!(
+        "{} evaluated against {}: status {}, {} violations, {} profiles, {} growth events, total capacity {}.",
+        contract.name,
+        evidence.name,
+        if passed { "PASSED" } else { "FAILED" },
+        violations.len(),
+        evidence.profile_report.profiles.len(),
+        current.totals.total_growth_events,
+        current.totals.total_current_capacity
+    );
+
+    DoctrineValidationReport {
+        contract_name: contract.name.clone(),
+        benchmark_name: evidence.name.clone(),
+        passed,
+        violations,
+        profile_report: evidence.profile_report.clone(),
+        regression_reports,
+        summary,
+    }
+}
+
+fn push_doctrine_limit(
+    violations: &mut Vec<DoctrineViolation>,
+    category: &str,
+    subject: &str,
+    metric: &str,
+    observed: usize,
+    limit: Option<usize>,
+    evidence_reference: EvidenceReference,
+) {
+    if let Some(limit) = limit {
+        if observed > limit {
+            violations.push(DoctrineViolation {
+                category: category.to_owned(),
+                subject: subject.to_owned(),
+                explanation: format!("{metric} observed {observed} exceeded limit {limit}"),
+                evidence_references: vec![evidence_reference],
+            });
+        }
+    }
+}
+
+fn growth_event_reference(event: &GrowthEvent) -> EvidenceReference {
+    EvidenceReference {
+        source: "growth_event".to_owned(),
+        subject: event.container_name.clone(),
+        metric: "capacity_added".to_owned(),
+        observed: format!(
+            "operation={},old_capacity={},new_capacity={},capacity_added={}",
+            event.operation_index, event.old_capacity, event.new_capacity, event.capacity_added
+        ),
+    }
+}
+
 /// Explicit memory behavior budget checked against one observed [`ArenaReport`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MemoryBudget {

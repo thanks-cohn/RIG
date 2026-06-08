@@ -106,51 +106,79 @@ extract_doc_tests() {
 print_summary() {
   local version="$1"
   local commit="$2"
-  local clippy_status="$3"
-  local tests_status="$4"
-  local doc_tests_status="$5"
-  local examples_status="$6"
-  local release_status="$7"
-  local total_tests="$8"
-  local doc_tests="$9"
-  local errors="${10}"
-  local warnings="${11}"
-  local ready="${12}"
+  local validation_date="$3"
+  local duration_seconds="$4"
+  local clippy_status="$5"
+  local tests_status="$6"
+  local doc_tests_status="$7"
+  local examples_status="$8"
+  local release_status="$9"
+  local total_tests="${10}"
+  local doc_tests="${11}"
+  local examples="${12}"
+  local failures="${13}"
+  local warnings="${14}"
+  local memory_contract_violations="${15}"
+  local regression_violations="${16}"
+  local budget_violations="${17}"
+  local benchmark_failures="${18}"
+  local certification_results="${19}"
+  local artifacts="${20}"
+  local ready="${21}"
+  local digest="${22}"
+  local success_digest="${23}"
 
   cat <<SUMMARY
 ==================================================
-RIG VALIDATION SUMMARY
-======================
+END-OF-RUN EVIDENCE SUMMARY
+===========================
 
 Version: $version
-
 Commit: $commit
+Validation timestamp: $validation_date
+Validation duration: ${duration_seconds}s
 
-Clippy:
-$clippy_status
+Check status:
+- Clippy status: $clippy_status
+- Test status: $tests_status
+- Documentation test status: $doc_tests_status
+- Example status: $examples_status
+- Release build status: $release_status
 
-Tests:
-$tests_status
+Execution counts:
+- Total tests executed: $total_tests
+- Documentation tests executed: $doc_tests
+- Total examples executed: $examples
+- Total failures: $failures
+- Total warnings: $warnings
 
-Doc Tests:
-$doc_tests_status
+Memory evidence:
+- Memory contract violations: $memory_contract_violations
+- Regression violations: $regression_violations
+- Budget violations: $budget_violations
+- Benchmark failures: $benchmark_failures
+- Evidence certification results: $certification_results
+- Newly generated artifacts: $artifacts
 
-Examples:
-$examples_status
+Release readiness: $ready
 
-Release Build:
-$release_status
+SUMMARY
 
-Total Tests: $total_tests
+  if [[ "$ready" == "YES" ]]; then
+    cat <<SUMMARY
+Success Digest
+--------------
+$success_digest
+SUMMARY
+  else
+    cat <<SUMMARY
+Failure Digest
+--------------
+$digest
+SUMMARY
+  fi
 
-Doc Tests: $doc_tests
-
-Errors: $errors
-
-Warnings: $warnings
-
-Ready To Tag:
-$ready
+  cat <<SUMMARY
 
 ==================================================
 SUMMARY
@@ -201,6 +229,62 @@ write_audit() {
 AUDIT
 }
 
+build_failure_digest() {
+  local file="$1"
+  local clippy_status="$2"
+  local tests_status="$3"
+  local doc_tests_status="$4"
+  local examples_status="$5"
+  local release_status="$6"
+  local digest=""
+
+  if [[ "$clippy_status" != "PASS" ]]; then
+    digest+=$'- Component: Clippy\n  Failure category: lint failure\n  Explanation: cargo clippy returned a non-zero exit status.\n  Location: see the Clippy section above.\n  Suggested next inspection point: search this log for "Clippy exit status" and preceding error lines.\n'
+  fi
+  if [[ "$tests_status" != "PASS" ]]; then
+    digest+=$'- Component: Tests\n  Failure category: test failure or panic\n  Explanation: cargo test returned a non-zero exit status.\n  Location: see test failure names and panic locations above.\n  Suggested next inspection point: search this log for "FAILED", "panicked at", or "failures:".\n'
+  fi
+  if [[ "$doc_tests_status" != "PASS" ]]; then
+    digest+=$'- Component: Documentation tests\n  Failure category: doctest failure\n  Explanation: cargo test --doc returned a non-zero exit status.\n  Location: see Doc-tests section above.\n  Suggested next inspection point: search this log for "Doc-tests".\n'
+  fi
+  if [[ "$examples_status" != "PASS" ]]; then
+    digest+=$'- Component: Examples\n  Failure category: example failure\n  Explanation: at least one example returned a non-zero exit status.\n  Location: see Example sections above.\n  Suggested next inspection point: search this log for "Example:".\n'
+  fi
+  if [[ "$release_status" != "PASS" ]]; then
+    digest+=$'- Component: Release build\n  Failure category: build failure\n  Explanation: cargo build --release returned a non-zero exit status.\n  Location: see Release Build section above.\n  Suggested next inspection point: search this log for "Release Build exit status".\n'
+  fi
+
+  local extracted
+  extracted="$(grep -E '(^error(\[|:)|^[[:space:]]*error:|panicked at|FAILED|exceeded .*limit|delta .*exceeded allowed delta|missing artifact)' "$file" | tail -20 || true)"
+  if [[ -n "$extracted" ]]; then
+    digest+=$'- Component: Extracted log evidence\n  Failure category: captured failure lines\n  Explanation: important failure lines reproduced from detailed logs.\n  Location: latest matching lines in validation log.\n  Suggested next inspection point: inspect the original command section around each line.\n'
+    digest+="$extracted"
+  fi
+  if [[ -z "$digest" ]]; then
+    digest='- No failures were detected by validation status or failure-pattern extraction.'
+  fi
+  printf '%s\n' "$digest"
+}
+
+build_success_digest() {
+  local file="$1"
+  local total_tests="$2"
+  local examples="$3"
+  local artifacts="$4"
+  local largest_growth highest_container
+  largest_growth="$(grep -E 'largest_growth|largest growth|Largest growth|capacity_added' "$file" | tail -1 || true)"
+  highest_container="$(grep -E 'current_capacity|total capacity|Total capacity' "$file" | tail -1 || true)"
+  cat <<DIGEST
+- Largest allocation workload: inspect benchmark/example reports above; highest observed container line: ${highest_container:-not emitted by examples}.
+- Largest growth event: ${largest_growth:-not emitted by examples}.
+- Highest-capacity container: ${highest_container:-not emitted by examples}.
+- Benchmark summary: examples executed=$examples; tests executed=$total_tests.
+- Evidence generated: $artifacts.
+- Contracts passed: no validation command failed.
+- Regressions detected: none in release validation status.
+DIGEST
+}
+
 run_logged() {
   local label="$1"
   shift
@@ -237,6 +321,8 @@ run_examples() {
 run_validation() {
   mkdir -p "$LOG_DIR" "$AUDIT_DIR"
   : > "$LOG_FILE"
+  local start_epoch
+  start_epoch="$(date +%s)"
 
   local version
   version="$(sed -n 's/^version = "\(.*\)"/\1/p' "$CRATE_DIR/Cargo.toml" | head -n 1)"
@@ -266,11 +352,15 @@ run_validation() {
   run_examples examples || examples_exit=$?
   run_logged "Release Build" cargo build --release --all-targets --all-features || release_exit=$?
 
-  local total_tests doc_tests errors warnings ready_exit
+  local total_tests doc_tests errors warnings ready_exit memory_contract_violations regression_violations budget_violations benchmark_failures
   total_tests="$(extract_total_tests "$LOG_FILE")"
   doc_tests="$(extract_doc_tests "$LOG_FILE")"
   errors="$(count_matches '(^error(\[|:)|^[[:space:]]*error:|panicked at)' "$LOG_FILE")"
   warnings="$(count_matches '(^warning(\[|:)|^[[:space:]]*warning:)' "$LOG_FILE")"
+  memory_contract_violations="$(count_matches '(memory doctrine|workload contract|Contract:).*FAILED|growth_profile_forbidden|growth_profile_required' "$LOG_FILE")"
+  regression_violations="$(count_matches '(regression|Regression).*FAILED|delta .*exceeded allowed delta' "$LOG_FILE")"
+  budget_violations="$(count_matches '(budget|Budget).*FAILED|exceeded .*limit' "$LOG_FILE")"
+  benchmark_failures="$(count_matches '(benchmark|Benchmark).*FAILED' "$LOG_FILE")"
 
   ready_exit=0
   for exit_code in "$fmt_exit" "$clippy_exit" "$tests_exit" "$doc_tests_exit" "$examples_exit" "$release_exit"; do
@@ -287,9 +377,19 @@ run_validation() {
   release_status="$(status_word "$release_exit")"
   ready="$(ready_word "$ready_exit")"
 
+  local end_epoch duration_seconds artifacts certification_results failure_digest success_digest
+  end_epoch="$(date +%s)"
+  duration_seconds="$((end_epoch - start_epoch))"
+  artifacts="$LOG_FILE, $AUDIT_FILE"
+  certification_results="$(count_matches 'Evidence certificate fingerprint|RIG evidence certificate' "$LOG_FILE") observed"
+  failure_digest="$(build_failure_digest "$LOG_FILE" "$clippy_status" "$tests_status" "$doc_tests_status" "$examples_status" "$release_status")"
+  success_digest="$(build_success_digest "$LOG_FILE" "$total_tests" "${#examples[@]}" "$artifacts")"
+
   print_summary \
     "$version" \
     "$commit" \
+    "$VALIDATION_DATE" \
+    "$duration_seconds" \
     "$clippy_status" \
     "$tests_status" \
     "$doc_tests_status" \
@@ -297,9 +397,18 @@ run_validation() {
     "$release_status" \
     "$total_tests" \
     "$doc_tests" \
+    "${#examples[@]}" \
     "$errors" \
     "$warnings" \
-    "$ready" | tee -a "$LOG_FILE"
+    "$memory_contract_violations" \
+    "$regression_violations" \
+    "$budget_violations" \
+    "$benchmark_failures" \
+    "$certification_results" \
+    "$artifacts" \
+    "$ready" \
+    "$failure_digest" \
+    "$success_digest" | tee -a "$LOG_FILE"
 
   write_audit \
     "$version" \
@@ -352,15 +461,15 @@ LOG
   errors="$(count_matches '(^error(\[|:)|^[[:space:]]*error:|panicked at)' "$sample_log")"
   warnings="$(count_matches '(^warning(\[|:)|^[[:space:]]*warning:)' "$sample_log")"
 
-  summary="$(print_summary 0.19.0 abc123 PASS PASS PASS PASS PASS "$total_tests" "$doc_tests" "$errors" "$warnings" YES)"
+  summary="$(print_summary 0.20.0 abc123 2026-06-07T00:00:00Z 5 PASS PASS PASS PASS PASS "$total_tests" "$doc_tests" 3 "$errors" "$warnings" 0 0 0 0 "0 observed" "$sample_log, $sample_audit" YES "- No failures" "- Contracts passed")"
   write_audit 0.19.0 abc123 2026-06-07T00:00:00Z PASS PASS PASS PASS PASS "$total_tests" "$doc_tests" 3 "$errors" "$warnings" YES "$sample_audit"
 
-  [[ "$summary" == *"RIG VALIDATION SUMMARY"* ]] || return 1
-  [[ "$summary" == *"Version: 0.19.0"* ]] || return 1
-  [[ "$summary" == *"Total Tests: 2"* ]] || return 1
-  [[ "$summary" == *"Doc Tests: 1"* ]] || return 1
-  [[ "$summary" == *"Errors: 1"* ]] || return 1
-  [[ "$summary" == *"Warnings: 1"* ]] || return 1
+  [[ "$summary" == *"END-OF-RUN EVIDENCE SUMMARY"* ]] || return 1
+  [[ "$summary" == *"Version: 0.20.0"* ]] || return 1
+  [[ "$summary" == *"Total tests executed: 2"* ]] || return 1
+  [[ "$summary" == *"Documentation tests executed: 1"* ]] || return 1
+  [[ "$summary" == *"Total failures: 1"* ]] || return 1
+  [[ "$summary" == *"Total warnings: 1"* ]] || return 1
   grep -q 'Ready To Tag: YES' "$sample_audit" || return 1
   rm -rf "$tmp_dir"
 }

@@ -469,3 +469,25 @@ assert!(certificate.passed);
 println!("{}", certificate.report());
 println!("{}", certificate.report_json());
 ```
+
+---
+
+## RIG v0.20.0 Memory Doctrine
+
+RIG now includes a Memory Doctrine layer for allocation transparency, workload contracts, regression prevention, and reproducible memory engineering. Developers can express expected memory behavior with `WorkloadMemoryContract`, `AllocationBudget`, `ContainerBudget`, `RegressionExpectation`, and `GrowthProfileExpectation`, then validate those expectations against real `BenchmarkEvidence` generated from observed RIG workloads.
+
+Doctrine reports provide pass/fail status, detailed violations, human explanations, machine-readable JSON, and evidence references for each decision. Evidence certification integrates with doctrine validation so successful and failed validations can be fingerprinted as durable release evidence.
+
+Run the doctrine example:
+
+```bash
+cargo run --manifest-path rig/Cargo.toml --example memory_doctrine
+```
+
+Run release validation with a high-signal end-of-run forensic summary:
+
+```bash
+bash scripts/validate.sh
+# then inspect the operational summary:
+tail -100 logs/validation-*.log
+```
