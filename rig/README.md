@@ -392,3 +392,59 @@ assert!(certificate.passed);
 println!("{}", certificate.report());
 println!("{}", certificate.report_json());
 ```
+
+## Memory Doctrine in v0.20.0
+
+RIG v0.20.0 adds a Memory Doctrine layer for turning allocation expectations into executable, evidence-backed contracts. The doctrine layer exists because allocation reports are useful for inspection, but release engineering needs a durable way to say which memory behavior is acceptable, which behavior is a regression, and which observed profiles are forbidden for a workload.
+
+The core types are:
+
+- `WorkloadMemoryContract` — the top-level workload doctrine.
+- `AllocationBudget` — aggregate arena-capacity, growth-event, and single-expansion limits.
+- `ContainerBudget` — per-container capacity, growth-event, and expansion limits.
+- `RegressionExpectation` — allowed baseline/current regression ranges.
+- `GrowthProfileExpectation` — required and forbidden deterministic memory profiles.
+- `BenchmarkEvidence` — benchmark evidence generated from actual `ArenaReport` snapshots and optional baseline comparison.
+- `DoctrineValidationReport` — pass/fail validation with human explanations, JSON output, and explicit evidence references.
+
+Doctrine validation never fabricates memory evidence. `BenchmarkEvidence::from_current` is built from an observed `ArenaReport`; `BenchmarkEvidence::compare` is built from observed baseline and current reports, a real `ArenaDiff`, growth summaries, profiles, and regression reports. Certification integrates through `DoctrineValidationReport::certify`, producing an `EvidenceCertificate` fingerprinted from the validation result.
+
+```rust
+use rig::{
+    AllocationBudget, Arena, BenchmarkEvidence, ContainerBudget, GrowthPolicy, RigVec,
+    WorkloadMemoryContract,
+};
+
+let mut arena = Arena::new("api-workload");
+let mut values = RigVec::with_policy(&mut arena, "values", GrowthPolicy::Exact);
+for value in 0..8 {
+    values.push(value);
+}
+
+let evidence = BenchmarkEvidence::from_current("api-workload", arena.snapshot());
+let contract = WorkloadMemoryContract::new("api memory contract")
+    .with_allocation_budget(
+        AllocationBudget::unlimited()
+            .with_max_arena_capacity(8)
+            .with_max_growth_events(8),
+    )
+    .with_container_budget(ContainerBudget::named("values").with_max_capacity(8));
+
+let report = contract.validate(&evidence);
+println!("{}", report.report());
+println!("{}", report.report_json());
+```
+
+Run the full doctrine example with:
+
+```bash
+cargo run --manifest-path rig/Cargo.toml --example memory_doctrine
+```
+
+The example performs real allocation work for successful certification, failed certification, budget enforcement, regression detection, benchmark comparison, and growth-profile validation.
+
+## Release validation forensic summary
+
+`scripts/validate.sh` preserves detailed logs while also ending each run with an **End-of-Run Evidence Summary**. The final section includes version, commit, timestamp, duration, check status, test and example counts, failure and warning totals, doctrine/regression/budget/benchmark signals, evidence certification observations, generated artifacts, and release readiness.
+
+If a run fails, a **Failure Digest** reproduces important failures near the end of the log with the component, category, explanation, location guidance, and suggested next inspection point. If a run succeeds, a **Success Digest** summarizes the successful operational picture and generated evidence. This makes `tail -100 logs/validation-*.log` useful without removing the detailed command logs needed for deeper investigation.

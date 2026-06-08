@@ -235,3 +235,18 @@ cargo run --example evidence_certificate
 cargo test certificate
 
 # Run evidence certificate tests.
+
+```bash
+# Run the memory doctrine example covering successful certification, failed certification, budget enforcement, regression detection, benchmark comparison, and growth profile validation.
+cargo run --manifest-path rig/Cargo.toml --example memory_doctrine
+```
+
+```bash
+# Run memory doctrine tests.
+cargo test --manifest-path rig/Cargo.toml --test memory_doctrine
+```
+
+```bash
+# Run the release validation workflow. The end of the log contains an End-of-Run Evidence Summary with failure/success digest suitable for tail -100 inspection.
+bash scripts/validate.sh
+```
