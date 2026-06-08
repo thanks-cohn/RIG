@@ -1,8 +1,8 @@
 # RIG Release Audit
 
-- Version: 0.20.0
-- Commit: c43229e
-- Validation Date: 2026-06-07T19:37:31Z
+- Version: 0.21.0
+- Commit: b4826f7
+- Validation Date: 2026-06-08T07:59:24Z
 - Ready To Tag: YES
 
 ## Validation Results
@@ -17,8 +17,8 @@
 
 ## Counts
 
-- Total Tests: 189
+- Total Tests: 195
 - Doc Tests: 6
-- Examples: 14
+- Examples: 17
 - Errors: 0
 - Warnings: 0

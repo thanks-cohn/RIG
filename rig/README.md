@@ -448,3 +448,41 @@ The example performs real allocation work for successful certification, failed c
 `scripts/validate.sh` preserves detailed logs while also ending each run with an **End-of-Run Evidence Summary**. The final section includes version, commit, timestamp, duration, check status, test and example counts, failure and warning totals, doctrine/regression/budget/benchmark signals, evidence certification observations, generated artifacts, and release readiness.
 
 If a run fails, a **Failure Digest** reproduces important failures near the end of the log with the component, category, explanation, location guidance, and suggested next inspection point. If a run succeeds, a **Success Digest** summarizes the successful operational picture and generated evidence. This makes `tail -100 logs/validation-*.log` useful without removing the detailed command logs needed for deeper investigation.
+
+## Evidence capture
+
+RIG v0.21.0 adds an explicit evidence capture layer for real runtime checkpoints. `EvidenceCapture` records named `Arena` snapshots into an `EvidenceSession`; `EvidenceArtifact` turns those checkpoints into durable JSON; `EvidenceMetadata` records the caller-supplied workload name plus live process and timestamp values observed by the running process.
+
+```rust
+use rig::{Arena, EvidenceCapture, RigVec};
+
+let mut arena = Arena::new("request-arena");
+let mut ids = RigVec::with_capacity(&mut arena, "ids", 2);
+let mut capture = EvidenceCapture::new("request-workload");
+
+ids.push(1);
+capture.capture_checkpoint("before", &arena);
+ids.push(2);
+ids.push(3);
+capture.capture_checkpoint("after", &arena);
+
+let artifact = capture.artifact();
+let comparison = artifact
+    .compare_checkpoints("before", "after")
+    .expect("both checkpoints exist");
+
+println!("{}", artifact.report());
+println!("{}", artifact.report_json());
+println!("{}", comparison.report());
+```
+
+Evidence capture stays explicit:
+
+- Checkpoints are captured only when the caller invokes `capture_checkpoint` or `capture_workload`.
+- Checkpoint contents are `ArenaReport` values produced by `arena.snapshot()` at runtime.
+- `EvidenceArtifact::save_json(path)` writes exactly the caller-provided JSON path.
+- `EvidenceArtifact::load_json(path)` reads saved artifact JSON from disk.
+- `EvidenceArtifact::compare_latest` and `compare_checkpoints` compare captured arena snapshots with `ArenaReport::diff`.
+- Human reports and machine-readable JSON reports contain only captured metadata, checkpoints, and diffs derived from those checkpoints.
+
+The examples `checkpoint_capture`, `workload_capture`, and `artifact_lifecycle` demonstrate named checkpoints, before/after workload evidence, JSON save/load, and artifact comparison without hidden files or synthetic metrics.
